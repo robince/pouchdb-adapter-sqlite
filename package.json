@@ -15,7 +15,7 @@
     "dev:capacitor-sqlite": "concurrently 'yarn workspace pouchdb-adapter-capacitor-sqlite watch'  'yarn dev:core' ",
     "dev:opsqlite": "concurrently 'yarn workspace pouchdb-adapter-opsqlite watch'  'yarn dev:core'",
     "dev:expo-sqlite": "concurrently 'yarn workspace pouchdb-adapter-expo-sqlite watch'  'yarn dev:core'",
-    "prepare": "yarn workspace pouchdb-adapter-sqlite-core build && yarn workspaces foreach --all -p --include 'pouchdb-adapter-*' run build"
+    "prepack": "yarn workspace pouchdb-adapter-sqlite-core build && yarn workspaces foreach --all -p --include 'pouchdb-adapter-*' run build"
   },
   "repository": {
     "type": "git",
