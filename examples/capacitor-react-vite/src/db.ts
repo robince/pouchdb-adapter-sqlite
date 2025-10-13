@@ -9,7 +9,7 @@ const DB = PouchDB.plugin(sqlitePlugin).plugin(capacitorSQLiteAdapter);
 
 const config: OpenConfig = {
   adapter: 'sqlite',
-  sqliteImplementation: 'capicator',
+  sqliteImplementation: 'capacitor',
   serializer: {
     serialize: async (data) => {
       return escapeBlob(data);

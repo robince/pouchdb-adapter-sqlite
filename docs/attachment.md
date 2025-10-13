@@ -44,7 +44,7 @@ Example usage for capacitor-sqlite (which has escaping issues with certain chara
 import { escapeBlob, unescapeBlob } from 'pouchdb-adapter-sqlite-core';
 export const db = new DB('cap', {
   adapter: 'sqlite',
-  sqliteImplementation: 'capicator',
+  sqliteImplementation: 'capacitor',
   serializer: {
     serialize: (data) => escapeBlob(data),
     deserialize: (data) => unescapeBlob(data),
