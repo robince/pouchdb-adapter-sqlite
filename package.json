@@ -5,6 +5,7 @@
     "examples/*"
   ],
   "type": "module",
+  "private": true,
   "scripts": {
     "postinstall": "patch-package",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
