@@ -3,6 +3,17 @@
 > **Project Status**: This project is currently under active development. While we strive to ensure compatibility across various SQLite implementations (especially for binary data storage), there may still be edge cases. We welcome any issues, suggestions or discussions to help improve the adapter.
 
 This package provides a core implementation of a generic PouchDB SQLite adapter that works with any SQLite database supporting basic SQL operations.
+## Alternative: RxDB SQLite Storage
+We are excited to announce a brand-new SQLite storage solution based on RxDB that offers enhanced capabilities across multiple platforms:
+Universal Platform Support: Works seamlessly across various platforms including Web, React Native, Electron, and Node.js
+Native SQLite Indexing: Leverages native SQLite indexing mechanisms for optimal query performance
+Built-in CouchDB Sync: RxDB natively supports CouchDB data synchronization protocol, enabling seamless realtime replication
+Modern Reactive Architecture: Provides observable-based APIs for real-time data updates
+This implementation is available at: https://github.com/BingCoke/rxdb/tree/json-worker
+Source Code: Use the json-worker branch to access the complete source code
+Build Artifacts: Use the json-worker-build branch to obtain pre-built distribution files
+The RxDB SQLite storage plugin (storage-sqlite-json) converts MongoDB query syntax to SQLite query syntax, enabling MongoDB-style queries on SQLite storage with advanced features like multi-key index support for array fields.
+
 
 ## Design Philosophy
 
