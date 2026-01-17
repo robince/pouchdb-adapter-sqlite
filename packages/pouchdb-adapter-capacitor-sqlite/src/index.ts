@@ -14,7 +14,7 @@ function CapacitorSQLitePlugin(PouchDB: PouchDB.Static) {
     );
   }
   // Register Capacitor SQLite implementation
-  PouchDB.registerSQLiteImplementation('capicator', capacitorSQLiteFactory);
+  PouchDB.registerSQLiteImplementation('capacitor', capacitorSQLiteFactory);
 }
 
 export default CapacitorSQLitePlugin;

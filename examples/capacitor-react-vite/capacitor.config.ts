@@ -2,11 +2,8 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.example.app',
-  appName: 'capica-react-vite',
+  appName: 'capacitor-react-vite',
   webDir: 'dist',
-  server: {
-    url: 'http://192.168.0.104:5173/',
-  },
   plugins: {
     CapacitorSQLite: {
       iosDatabaseLocation: 'Library/CapacitorDatabase',

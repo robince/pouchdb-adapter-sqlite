@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import './App.css';
-import { db } from './db';
+import { db, getAllDocuments, storeDocument } from './db';
 
 function App() {
   const [docs, setDocs] = useState<any[]>([]);
-  const [url, seturl] = useState<string>('');
+  const [message, setMessage] = useState('');
+
   useEffect(() => {
     const init = async () => {
       const res = await db.allDocs({ include_docs: true, attachments: true, binary: true });
@@ -13,45 +14,42 @@ function App() {
     init();
   }, []);
 
+  const storeMessage = async () => {
+    if (message.trim() === '') return;
+    const newDoc = {
+      _id: new Date().toISOString(),
+      message,
+    };
+    await storeDocument(newDoc);
+    const updatedDocs = await getAllDocuments();
+    setDocs(updatedDocs);
+    setMessage('');
+  };
+
   return (
     <div className="App">
-      <h1>PouchDB Capicator SQLite Test</h1>
-      <img src={url} />
-      <button
-        onClick={async () => {
-          const doc = await db.get('8b9a4e2fbe3250a9b9294945c507cd98', {
-            attachments: true,
-            binary: true,
-          });
-          console.log(doc);
+      <h1>PouchDB capacitor SQLite Test</h1>
 
-          const atts = doc._attachments!;
-          console.log(Object.getPrototypeOf(atts));
-          const d: Blob = (atts['04.png'] as any).data as Blob;
+        <input
+          type="text"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Enter a message"
+        />
+        <button
+          type="button"
+          onClick={storeMessage}
+          >Save</button>
 
-          const url = URL.createObjectURL(d);
-          seturl(url);
-        }}
-      >
-        retry
-      </button>
-      <button
-        onClick={async () => {
-          db.destroy();
-        }}
-      >
-        retry
-      </button>
-      <p>Status: {docs.length}</p>
-      <h2>Documents:</h2>
+
+      <h2>Stored Messages:</h2>
       <ul>
         {docs.map((doc) => (
-          <li key={doc._id}>
-            {doc._id}: {JSON.stringify(doc, null, 2)}
-          </li>
+          <li key={doc._id}>{doc.message}</li>
         ))}
       </ul>
-    </div>
+      </div>
+
   );
 }
 

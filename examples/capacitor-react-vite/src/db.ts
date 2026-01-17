@@ -1,36 +1,50 @@
+import {Capacitor} from '@capacitor/core';
 import PouchDB from 'pouchdb';
-import capicatorSQLiteAdapter from 'pouchdb-adapter-capacitor-sqlite';
-import sqlitePlugn from 'pouchdb-adapter-sqlite-core';
+import capacitorSQLiteAdapter from 'pouchdb-adapter-capacitor-sqlite';
+import sqlitePlugin from 'pouchdb-adapter-sqlite-core';
 import { escapeBlob, unescapeBlob } from 'pouchdb-adapter-sqlite-core';
+import { OpenConfig } from 'pouchdb-adapter-sqlite-core/interface';
 
-const DB = PouchDB.plugin(sqlitePlugn).plugin(capicatorSQLiteAdapter);
-export const remotedb = new PouchDB('http://192.168.0.104:8080/couchdb/example', {
-  auth: {
-    username: 'admin',
-    password: '123456',
-  },
-});
+const DB = PouchDB.plugin(sqlitePlugin).plugin(capacitorSQLiteAdapter);
 
-export const db = new DB('capp2', {
+const config: OpenConfig = {
   adapter: 'sqlite',
-  sqliteImplementation: 'capicator',
+  sqliteImplementation: 'capacitor',
   serializer: {
-    serialize: (data) => {
+    serialize: async (data) => {
       return escapeBlob(data);
     },
-    deserialize: (data) => {
+    deserialize: async (data) => {
       return unescapeBlob(data);
     },
   },
-});
-
-export const sync = db.sync(remotedb, { live: true, retry: true });
-
-sync.on('change', () => {
-  console.log('get change');
-});
-
-const test = async () => {
-  // .... do something you want
 };
-test();
+
+export let db: PouchDB.Database;
+
+// use browser pouchdb if we're on web, otherwise use capacitor-sqlite
+if (Capacitor.getPlatform() === 'web') {
+  db = new PouchDB('capp2');
+} else {
+  db = new DB('capp2', config);
+}
+
+export const storeDocument = async (doc: any) => {
+  try {
+    const response = await db.put(doc);
+    console.log('Document stored successfully:', response);
+  } catch (error) {
+    console.error('Error storing document:', error);
+  }
+};
+
+export const getAllDocuments = async () => {
+  try {
+    const result = await db.allDocs({ include_docs: true, attachments: true, binary: true });
+    return result.rows.map((row) => row.doc);
+  } catch (error) {
+    console.error('Error retrieving documents:', error);
+    return [];
+  }
+};
+

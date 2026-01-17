@@ -5,6 +5,7 @@
     "examples/*"
   ],
   "type": "module",
+  "private": true,
   "scripts": {
     "postinstall": "patch-package",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
@@ -14,7 +15,7 @@
     "dev:capacitor-sqlite": "concurrently 'yarn workspace pouchdb-adapter-capacitor-sqlite watch'  'yarn dev:core' ",
     "dev:opsqlite": "concurrently 'yarn workspace pouchdb-adapter-opsqlite watch'  'yarn dev:core'",
     "dev:expo-sqlite": "concurrently 'yarn workspace pouchdb-adapter-expo-sqlite watch'  'yarn dev:core'",
-    "prepare": "yarn workspace pouchdb-adapter-sqlite-core build && yarn workspaces foreach --all -p --include 'pouchdb-adapter-*' run build"
+    "prepack": "yarn workspace pouchdb-adapter-sqlite-core build && yarn workspaces foreach --all -p --include 'pouchdb-adapter-*' run build"
   },
   "repository": {
     "type": "git",
@@ -40,5 +41,6 @@
   "dependencies": {
     "@types/pouchdb-core": "^7.0.15",
     "react-native-blob-jsi-helper": "^0.3.1"
-  }
+  },
+  "packageManager": "yarn@4.10.3"
 }
