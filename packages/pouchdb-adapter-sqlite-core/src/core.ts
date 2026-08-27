@@ -170,6 +170,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   let txnQueue: TransactionQueue;
   let instanceId: string;
   let closeDatabaseLease: (() => Promise<void>) | undefined;
+  let maxBoundParameters = 999;
   let encoding: string = 'UTF-8';
   api.auto_compaction = false;
 
@@ -193,6 +194,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
 
         txnQueue = openDBResult.transactionQueue;
         closeDatabaseLease = openDBResult.close;
+        maxBoundParameters = openDBResult.maxBoundParameters;
         logger.debug('Setting up database');
         setup(cb);
         logger.debug('Database opened successfully.');
@@ -461,10 +463,6 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         }
       });
 
-      // Durable Object SQL accepts at most 100 bound parameters per query.
-      // Keep this below that ceiling so the core remains portable across all
-      // supported SQLite implementations.
-      const maxBoundParameters = 100;
       for (let index = 0; index < destinctKeys.length; index += maxBoundParameters) {
         const chunk = destinctKeys.slice(index, index + maxBoundParameters);
         if (chunk.length > 0) {

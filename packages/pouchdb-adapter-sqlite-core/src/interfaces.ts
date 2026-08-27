@@ -220,6 +220,8 @@ export type OpenDatabaseResult =
   | {
       db: SQLiteAdapter;
       transactionQueue: TransactionQueue;
+      /** Maximum number of SQL parameters supported by this implementation. */
+      maxBoundParameters: number;
       /** Release this particular open database lease. Safe to call more than once. */
       close: () => Promise<void>;
     }
@@ -234,6 +236,9 @@ export type OpenDatabaseResult =
 export interface SQLiteImplementationFactory {
   /** Whether opened handles may be cached process-wide by database name. */
   useDatabaseCache?: boolean;
+
+  /** Maximum number of parameters that may be bound to one SQL statement. Defaults to 999. */
+  maxBoundParameters?: number;
 
   /**
    * Open database

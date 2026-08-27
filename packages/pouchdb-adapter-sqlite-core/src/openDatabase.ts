@@ -17,6 +17,7 @@ interface SharedDatabase {
   transactionQueue: TransactionQueueLike;
   factory: SQLiteImplementationFactory;
   name: string;
+  maxBoundParameters: number;
 }
 
 interface CachedDatabase {
@@ -48,6 +49,7 @@ async function createSharedDatabase(
     transactionQueue: result.transactionQueue ?? new DefaultTransactionQueue(db),
     factory,
     name: options.name,
+    maxBoundParameters: factory.maxBoundParameters ?? 999,
   };
 }
 
@@ -69,6 +71,7 @@ function databaseLease(shared: SharedDatabase, release: () => Promise<void>): Op
   return {
     db: shared.db,
     transactionQueue: shared.transactionQueue,
+    maxBoundParameters: shared.maxBoundParameters,
     async close() {
       if (released) {
         return;

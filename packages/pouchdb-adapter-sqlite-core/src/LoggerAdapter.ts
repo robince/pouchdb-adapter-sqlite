@@ -1,6 +1,5 @@
 import {
   BinarySerializer,
-  SQLiteAdapter,
   SQLiteLoggerAdapter,
   SQLiteExecuteResult,
   SQLiteDatabase,
@@ -10,18 +9,26 @@ import {
 import { logger } from './logger';
 
 export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
-  private adapter: SQLiteAdapter;
-  constructor(adapter: SQLiteAdapter) {
+  private adapter: SQLiteDatabase;
+  constructor(adapter: SQLiteDatabase) {
     this.adapter = adapter;
-    this.serializer = adapter.serializer;
-    this.createBlob = adapter.createBlob?.bind(adapter);
-    this.btoa = adapter.btoa?.bind(adapter);
+    if ('serializer' in adapter) {
+      this.serializer = adapter.serializer as BinarySerializer | undefined;
+    }
+    if ('createBlob' in adapter && typeof adapter.createBlob === 'function') {
+      this.createBlob = adapter.createBlob.bind(adapter) as (binary: any, type: any) => any;
+    }
+    if ('btoa' in adapter && typeof adapter.btoa === 'function') {
+      this.btoa = adapter.btoa.bind(adapter) as (data: any) => any;
+    }
+
+    // Assign this conditionally so the wrapper preserves transaction as a
+    // truthful capability probe for legacy begin/commit/rollback adapters.
     if (adapter.transaction) {
       this.transaction = async (fn) => {
         logger.debug(`transaction`);
         await adapter.transaction!(async (scopedDb) => {
-          const loggedDb =
-            scopedDb === adapter ? this : new LoggerSqliteAdapterWarpper(scopedDb as SQLiteAdapter);
+          const loggedDb = scopedDb === adapter ? this : new LoggerSqliteAdapterWarpper(scopedDb);
           await fn(loggedDb);
         });
         logger.debug(`transaction success`);
