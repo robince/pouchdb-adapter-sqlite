@@ -1,10 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const {
-  openDatabase,
-  registerSQLiteImplementation,
-} = require('../.test-lib-cjs/openDatabase.js');
+const { openDatabase, registerSQLiteImplementation } = require('../.test-lib-cjs/openDatabase.js');
 
 function adapter(label) {
   return {
@@ -60,6 +57,83 @@ test('cached databases close only after their final lease', async () => {
 
   await second.close();
   assert.equal(registered.state.closes, 1);
+});
+
+test('an in-flight open reserves its lease before an existing lease closes', async () => {
+  const implementationName = `in-flight-${Date.now()}-${Math.random()}`;
+  const registered = factory(implementationName);
+  registerSQLiteImplementation(implementationName, registered.implementation);
+
+  const options = { name: 'raced.db', sqliteImplementation: implementationName };
+  const first = await openDatabase(options);
+  const secondPromise = openDatabase(options);
+  await first.close();
+  const second = await secondPromise;
+  const third = await openDatabase(options);
+
+  assert.equal(registered.state.opens, 1);
+  assert.equal(registered.state.closes, 0);
+  assert.equal(second.db, first.db);
+  assert.equal(third.db, first.db);
+
+  await second.close();
+  assert.equal(registered.state.closes, 0);
+  await third.close();
+  assert.equal(registered.state.closes, 1);
+});
+
+test('caller cache options cannot split queues over a factory-owned connection', async () => {
+  const implementationName = `caller-cache-${Date.now()}-${Math.random()}`;
+  const registered = factory(implementationName);
+  registerSQLiteImplementation(implementationName, registered.implementation);
+
+  const options = {
+    name: 'factory-policy.db',
+    sqliteImplementation: implementationName,
+    useDatabaseCache: false,
+  };
+  const first = await openDatabase(options);
+  const second = await openDatabase(options);
+
+  assert.equal(registered.state.opens, 1);
+  assert.equal(first.db, second.db);
+  assert.equal(first.transactionQueue, second.transactionQueue);
+
+  await first.close();
+  await second.close();
+  assert.equal(registered.state.closes, 1);
+});
+
+test('a new connection waits for the previous native handle to finish closing', async () => {
+  const implementationName = `closing-${Date.now()}-${Math.random()}`;
+  const registered = factory(implementationName);
+  let finishClose;
+  const closeGate = new Promise((resolve) => {
+    finishClose = resolve;
+  });
+  registered.implementation.closeDatabase = async () => {
+    registered.state.closes++;
+    await closeGate;
+  };
+  registerSQLiteImplementation(implementationName, registered.implementation);
+
+  const options = { name: 'reopen.db', sqliteImplementation: implementationName };
+  const first = await openDatabase(options);
+  const closing = first.close();
+  const secondPromise = openDatabase(options);
+
+  await Promise.resolve();
+  assert.equal(registered.state.opens, 1);
+  assert.equal(registered.state.closes, 1);
+
+  finishClose();
+  await closing;
+  const second = await secondPromise;
+  assert.equal(registered.state.opens, 2);
+  assert.notEqual(second.db, first.db);
+
+  await second.close();
+  assert.equal(registered.state.closes, 2);
 });
 
 test('uncached databases close their own factory handles', async () => {

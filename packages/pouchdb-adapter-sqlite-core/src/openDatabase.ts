@@ -17,12 +17,17 @@ interface SharedDatabase {
   transactionQueue: TransactionQueueLike;
   factory: SQLiteImplementationFactory;
   name: string;
+}
+
+interface CachedDatabase {
+  shared: Promise<SharedDatabase>;
   referenceCount: number;
+  closing?: Promise<void>;
 }
 
 // Cache connection creation as well as opened handles so concurrent opens of
 // the same implementation and database share one native connection.
-const cachedDatabases = new Map<string, Promise<SharedDatabase>>();
+const cachedDatabases = new Map<string, CachedDatabase>();
 
 function cacheKey(implementationName: string, name: string): string {
   return JSON.stringify([implementationName, name]);
@@ -43,6 +48,18 @@ async function createSharedDatabase(
     transactionQueue: result.transactionQueue ?? new DefaultTransactionQueue(db),
     factory,
     name: options.name,
+  };
+}
+
+function createCacheEntry(
+  factory: SQLiteImplementationFactory,
+  options: OpenDatabaseOptions,
+  afterClose?: Promise<void>
+): CachedDatabase {
+  return {
+    shared: afterClose
+      ? afterClose.catch(() => undefined).then(() => createSharedDatabase(factory, options))
+      : createSharedDatabase(factory, options),
     referenceCount: 0,
   };
 }
@@ -99,48 +116,62 @@ export async function openDatabase(options: OpenDatabaseOptions): Promise<OpenDa
 
   try {
     const factory = getSQLiteImplementation(implementationName);
-    const useDatabaseCache =
-      options.useDatabaseCache !== false && factory.useDatabaseCache !== false;
+    // Cache policy belongs to the implementation. A caller cannot safely opt
+    // out when a native driver itself returns one connection per database name.
+    const useDatabaseCache = factory.useDatabaseCache !== false;
 
     if (!useDatabaseCache) {
       logger.debug(`Opening uncached database: ${options.name} (${implementationName})`);
       const shared = await createSharedDatabase(factory, options);
-      shared.referenceCount = 1;
       return databaseLease(shared, () => factory.closeDatabase(options.name));
     }
 
     const key = cacheKey(implementationName, options.name);
-    let sharedPromise = cachedDatabases.get(key);
-    if (!sharedPromise) {
+    let cached = cachedDatabases.get(key);
+    if (!cached) {
       logger.debug(
         `Opening database: ${options.name} (using ${implementationName} implementation)`
       );
-      sharedPromise = createSharedDatabase(factory, options);
-      cachedDatabases.set(key, sharedPromise);
+      cached = createCacheEntry(factory, options);
+      cachedDatabases.set(key, cached);
+    } else if (cached.closing) {
+      logger.debug(`Waiting for database to close before reopening: ${options.name}`);
+      cached = createCacheEntry(factory, options, cached.closing);
+      cachedDatabases.set(key, cached);
     } else {
       logger.debug(`Using cached database connection: ${options.name}`);
     }
 
+    // Reserve this lease before yielding. Otherwise the last existing lease
+    // can close the shared native handle while this open is awaiting it.
+    cached.referenceCount++;
+
     let shared: SharedDatabase;
     try {
-      shared = await sharedPromise;
+      shared = await cached.shared;
     } catch (error) {
-      if (cachedDatabases.get(key) === sharedPromise) {
+      cached.referenceCount--;
+      if (cached.referenceCount === 0 && cachedDatabases.get(key) === cached) {
         cachedDatabases.delete(key);
       }
       throw error;
     }
-    shared.referenceCount++;
 
     return databaseLease(shared, async () => {
-      shared.referenceCount--;
-      if (shared.referenceCount > 0) {
+      cached.referenceCount--;
+      if (cached.referenceCount > 0) {
         return;
       }
-      if (cachedDatabases.get(key) === sharedPromise) {
-        cachedDatabases.delete(key);
+
+      const closing = Promise.resolve().then(() => shared.factory.closeDatabase(shared.name));
+      cached.closing = closing;
+      try {
+        await closing;
+      } finally {
+        if (cachedDatabases.get(key) === cached) {
+          cachedDatabases.delete(key);
+        }
       }
-      await shared.factory.closeDatabase(shared.name);
     });
   } catch (error) {
     logger.error(`Failed to open database: ${options.name}`, error);

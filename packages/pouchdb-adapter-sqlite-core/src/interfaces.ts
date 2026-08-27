@@ -151,11 +151,6 @@ export interface BinarySerializer {
 export interface OpenConfig {
   adapter: 'sqlite';
   sqliteImplementation?: string;
-  /**
-   * Disable the process-wide connection cache for request- or instance-scoped
-   * database handles such as Durable Object storage.
-   */
-  useDatabaseCache?: boolean;
   btoa?: (data: any) => any;
   createBlob?: (binary: any, type: any) => any;
   serializer?: BinarySerializer;
