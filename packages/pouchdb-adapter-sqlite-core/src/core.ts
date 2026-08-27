@@ -35,7 +35,7 @@ import {
   handleSQLiteError,
 } from './utils';
 
-import openDatabase, { closeDatabase } from './openDatabase';
+import openDatabase from './openDatabase';
 import {
   BinarySerializer,
   OpenDatabaseOptions,
@@ -169,6 +169,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   // @ts-ignore
   let txnQueue: TransactionQueue;
   let instanceId: string;
+  let closeDatabaseLease: (() => Promise<void>) | undefined;
   let encoding: string = 'UTF-8';
   api.auto_compaction = false;
 
@@ -191,6 +192,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         api.serializer = serializer;
 
         txnQueue = openDBResult.transactionQueue;
+        closeDatabaseLease = openDBResult.close;
         logger.debug('Setting up database');
         setup(cb);
         logger.debug('Database opened successfully.');
@@ -748,7 +750,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._close = (callback: (err?: any) => void) => {
-    closeDatabase(sqlOpts.name)
+    (closeDatabaseLease?.() ?? Promise.resolve())
       .then(() => callback())
       .catch((err) => callback(err));
   };

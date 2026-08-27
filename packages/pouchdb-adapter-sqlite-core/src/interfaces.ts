@@ -225,6 +225,8 @@ export type OpenDatabaseResult =
   | {
       db: SQLiteAdapter;
       transactionQueue: TransactionQueue;
+      /** Release this particular open database lease. Safe to call more than once. */
+      close: () => Promise<void>;
     }
   | {
       error: Error;
