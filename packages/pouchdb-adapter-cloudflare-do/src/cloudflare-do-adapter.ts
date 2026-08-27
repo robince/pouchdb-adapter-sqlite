@@ -1,4 +1,5 @@
 import type {
+  OpenConfig,
   OpenDatabaseOptions,
   SQLiteAdapter,
   SQLiteDatabase,
@@ -27,6 +28,22 @@ export interface DurableObjectStorageLike {
 
 export interface CloudflareDOOpenDatabaseOptions extends OpenDatabaseOptions {
   durableObjectStorage: DurableObjectStorageLike;
+}
+
+export interface CloudflareDOPouchOptions extends OpenConfig {
+  sqliteImplementation: 'cloudflare-do';
+  durableObjectStorage: DurableObjectStorageLike;
+}
+
+/** Create constructor options without weakening PouchDB configuration typing. */
+export function cloudflareDOOptions(
+  durableObjectStorage: DurableObjectStorageLike
+): CloudflareDOPouchOptions {
+  return {
+    adapter: 'sqlite',
+    sqliteImplementation: 'cloudflare-do',
+    durableObjectStorage,
+  };
 }
 
 /**

@@ -1303,10 +1303,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@cloudflare/workers-types@npm:^5.20260826.1":
-  version: 5.20260826.1
-  resolution: "@cloudflare/workers-types@npm:5.20260826.1"
-  checksum: 10c0/5414b33b1640d55edfbf723eea5dad0fbd335e864785b29997e3be44e87ac9fe6b4d606d85e512ddc40e2e5ccbe068b778d3ff37af39691e68e406c8503d55ac
+"@cloudflare/workers-types@npm:^5.20260827.1":
+  version: 5.20260827.1
+  resolution: "@cloudflare/workers-types@npm:5.20260827.1"
+  checksum: 10c0/65044c2b764cc75fd2738c338dc7b5f8536fcd73dcde35bc6e7cc730d70d89201700a721386b7354cfa89b25be3085844a56ac020666e72c70a20dd661bae340
   languageName: node
   linkType: hard
 
@@ -5260,7 +5260,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@vitest/runner@npm:4.1.11":
+"@vitest/runner@npm:4.1.11, @vitest/runner@npm:^4.1.0":
   version: 4.1.11
   resolution: "@vitest/runner@npm:4.1.11"
   dependencies:
@@ -5270,7 +5270,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@vitest/snapshot@npm:4.1.11":
+"@vitest/snapshot@npm:4.1.11, @vitest/snapshot@npm:^4.1.0":
   version: 4.1.11
   resolution: "@vitest/snapshot@npm:4.1.11"
   dependencies:
@@ -14536,9 +14536,11 @@ __metadata:
   resolution: "pouchdb-adapter-cloudflare-do@workspace:packages/pouchdb-adapter-cloudflare-do"
   dependencies:
     "@cloudflare/vitest-plugin": "npm:^1.1.0"
-    "@cloudflare/workers-types": "npm:^5.20260826.1"
+    "@cloudflare/workers-types": "npm:^5.20260827.1"
     "@types/pouchdb-core": "npm:^7.0.15"
-    pouchdb-adapter-sqlite-core: "npm:^1.1.2"
+    "@vitest/runner": "npm:^4.1.0"
+    "@vitest/snapshot": "npm:^4.1.0"
+    pouchdb-adapter-sqlite-core: "workspace:^"
     pouchdb-core: "npm:^9.0.0"
     typescript: "npm:^5.8.3"
     vitest: "npm:^4.1.0"
@@ -14585,7 +14587,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"pouchdb-adapter-sqlite-core@npm:1.1.2, pouchdb-adapter-sqlite-core@npm:^1.1.2, pouchdb-adapter-sqlite-core@workspace:^, pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core":
+"pouchdb-adapter-sqlite-core@npm:1.1.2, pouchdb-adapter-sqlite-core@workspace:^, pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core":
   version: 0.0.0-use.local
   resolution: "pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core"
   dependencies:

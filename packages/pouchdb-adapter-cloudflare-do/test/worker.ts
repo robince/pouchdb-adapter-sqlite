@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import PouchDB from 'pouchdb-core';
 
-import cloudflareDOAdapter, { CloudflareDODatabase, type DurableObjectStorageLike } from '../src';
+import cloudflareDOAdapter, { CloudflareDODatabase, cloudflareDOOptions } from '../src';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -14,11 +14,7 @@ export class PouchDatabase extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.db = new PouchDB('db', {
-      adapter: 'sqlite',
-      sqliteImplementation: 'cloudflare-do',
-      durableObjectStorage: ctx.storage,
-    } as PouchDB.Configuration.DatabaseConfiguration);
+    this.db = new PouchDB('db', cloudflareDOOptions(ctx.storage));
   }
 
   async put(doc: Record<string, unknown>) {
@@ -102,7 +98,7 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async transactionRollbackProbe(): Promise<number> {
-    const sql = new CloudflareDODatabase(this.ctx.storage as DurableObjectStorageLike);
+    const sql = new CloudflareDODatabase(this.ctx.storage);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS rollback_probe (value INTEGER)');
     try {
       await sql.transaction(async (db) => {

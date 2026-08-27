@@ -10,7 +10,7 @@ database is constructed:
 ```ts
 import { DurableObject } from 'cloudflare:workers';
 import PouchDB from 'pouchdb-core';
-import cloudflareDOAdapter from 'pouchdb-adapter-cloudflare-do';
+import cloudflareDOAdapter, { cloudflareDOOptions } from 'pouchdb-adapter-cloudflare-do';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -19,11 +19,7 @@ export class PouchDatabase extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.db = new PouchDB('db', {
-      adapter: 'sqlite',
-      sqliteImplementation: 'cloudflare-do',
-      durableObjectStorage: ctx.storage,
-    } as any);
+    this.db = new PouchDB('db', cloudflareDOOptions(ctx.storage));
   }
 }
 ```
@@ -31,8 +27,9 @@ export class PouchDatabase extends DurableObject<Env> {
 The Durable Object class must use SQLite storage (`new_sqlite_classes` in a
 Wrangler migration). The implementation automatically disables the core's
 process-wide handle cache because a Workers isolate can host several Durable
-Object instances with identically named PouchDB databases.
+Object instances with identically named PouchDB databases. It also tells the
+core to keep SQL statements within Durable Object storage's 100-parameter
+binding limit; other implementations retain the core's 999-parameter default.
 
-`npm test` runs the standalone workerd suite with PouchDB 9. In this workspace,
-`npm run test:current-pouchdb` additionally loads the built `../pouchdb`
-checkout and exercises this adapter directly against its current core.
+`yarn workspace pouchdb-adapter-cloudflare-do test` runs the standalone
+workerd suite with PouchDB 9.

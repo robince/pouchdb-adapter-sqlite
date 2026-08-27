@@ -21,7 +21,6 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run test/adapter.test.ts",
-    "test:current-pouchdb": "vitest run --config vitest.current.config.ts",
     "watch": "tsc --watch"
   },
   "keywords": [
@@ -32,12 +31,14 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "pouchdb-adapter-sqlite-core": "^1.1.2"
+    "pouchdb-adapter-sqlite-core": "workspace:^"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.0",
-    "@cloudflare/workers-types": "^5.20260826.1",
+    "@cloudflare/workers-types": "^5.20260827.1",
     "@types/pouchdb-core": "^7.0.15",
+    "@vitest/runner": "^4.1.0",
+    "@vitest/snapshot": "^4.1.0",
     "pouchdb-core": "^9.0.0",
     "typescript": "^5.8.3",
     "vitest": "^4.1.0"
