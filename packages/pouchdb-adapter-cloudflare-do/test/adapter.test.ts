@@ -65,6 +65,17 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     const all = await db.allDocs({ keys: documents.map((doc) => doc._id) });
     expect(all.rows).toHaveLength(150);
 
+    const paged = await db.rawAllDocs({
+      keys: documents.map((doc) => doc._id),
+      skip: 5,
+      limit: 10,
+    });
+    expect(paged.rows.map((row) => row.id)).toEqual(
+      documents.slice(5, 15).map((doc) => doc._id)
+    );
+
+    expect((await db.allDocs({ keys: [] })).rows).toEqual([]);
+
     const doomed = await db.get('doc-000');
     expect(await db.purge('doc-000', doomed._rev)).toMatchObject({
       ok: true,
@@ -72,5 +83,45 @@ describe('PouchDB Durable Object SQLite adapter', () => {
       documentWasRemovedCompletely: true,
     });
     expect(await db.getStatus('doc-000')).toBe(404);
+  });
+
+  it('keeps purge sequence metadata aligned with surviving revisions', async () => {
+    const db = database('purge-sequences');
+    await db.bulkDocs(
+      [
+        {
+          _id: 'conflicted',
+          _rev: '1-root',
+          value: 'root',
+          _revisions: { start: 1, ids: ['root'] },
+        },
+        {
+          _id: 'conflicted',
+          _rev: '2-left',
+          value: 'left',
+          _revisions: { start: 2, ids: ['left', 'root'] },
+        },
+        {
+          _id: 'conflicted',
+          _rev: '2-right',
+          value: 'right',
+          _revisions: { start: 2, ids: ['right', 'root'] },
+        },
+      ],
+      { new_edits: false }
+    );
+
+    expect((await db.get('conflicted'))._rev).toBe('2-right');
+    expect((await db.info()).update_seq).toBe(3);
+    await db.purge('conflicted', '2-right');
+
+    const afterPurge = await db.info();
+    expect(afterPurge.update_seq).toBe(2);
+    expect((await db.get('conflicted'))._rev).toBe('2-left');
+    expect((await db.changes({ since: afterPurge.update_seq })).results).toEqual([]);
+  });
+
+  it('preserves PouchDB errors raised inside the purge transaction', async () => {
+    expect(await database('purge-errors').rawPurgeStatus('missing', ['1-missing'])).toBe(404);
   });
 });

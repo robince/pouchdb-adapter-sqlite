@@ -47,8 +47,11 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.db.remove(id, rev);
   }
 
-  async bulkDocs(docs: Array<Record<string, unknown>>) {
-    return this.db.bulkDocs(docs);
+  async bulkDocs(
+    docs: Array<Record<string, unknown>>,
+    options?: PouchDB.Core.BulkDocsOptions
+  ) {
+    return this.db.bulkDocs(docs, options);
   }
 
   async allDocs(options?: PouchDB.Core.AllDocsOptions) {
@@ -71,6 +74,32 @@ export class PouchDatabase extends DurableObject<Env> {
         documentWasRemovedCompletely: boolean;
       }>;
     }).purge(id, rev);
+  }
+
+  async rawAllDocs(options: Record<string, unknown>): Promise<PouchDB.Core.AllDocsResponse<{}>> {
+    return new Promise((resolve, reject) => {
+      (this.db as any)._allDocs(options, (error: unknown, response: unknown) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(response as PouchDB.Core.AllDocsResponse<{}>);
+        }
+      });
+    });
+  }
+
+  async rawPurgeStatus(id: string, revs: string[]): Promise<number> {
+    return new Promise((resolve) => {
+      (this.db as any)._purge(id, revs, (error: unknown) => {
+        resolve(
+          typeof error === 'object' && error !== null && 'status' in error
+            ? Number(error.status)
+            : error
+              ? 500
+              : 200
+        );
+      });
+    });
   }
 
   async transactionRollbackProbe(): Promise<number> {
