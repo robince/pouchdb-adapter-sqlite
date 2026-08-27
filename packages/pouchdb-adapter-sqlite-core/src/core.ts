@@ -1,5 +1,11 @@
 import { clone, pick, filterChange, changesHandler as Changes, uuid } from 'pouchdb-utils';
-import { collectConflicts, traverseRevTree, latest as getLatest } from 'pouchdb-merge';
+import {
+  collectConflicts,
+  traverseRevTree,
+  latest as getLatest,
+  removeLeafFromTree,
+  winningRev,
+} from 'pouchdb-merge';
 import { safeJsonParse, safeJsonStringify } from 'pouchdb-json';
 import {
   binaryStringToBlobOrBuffer as binStringToBlob,
@@ -453,8 +459,12 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         }
       });
 
-      for (let index = 0; index < destinctKeys.length; index += 999) {
-        const chunk = destinctKeys.slice(index, index + 999);
+      // Durable Object SQL accepts at most 100 bound parameters per query.
+      // Keep this below that ceiling so the core remains portable across all
+      // supported SQLite implementations.
+      const maxBoundParameters = 100;
+      for (let index = 0; index < destinctKeys.length; index += maxBoundParameters) {
+        const chunk = destinctKeys.slice(index, index + maxBoundParameters);
         if (chunk.length > 0) {
           keyChunks.push(chunk);
         }
@@ -738,7 +748,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._close = (callback: (err?: any) => void) => {
-    closeDatabase(api._name)
+    closeDatabase(sqlOpts.name)
       .then(() => callback())
       .catch((err) => callback(err));
   };
@@ -796,30 +806,69 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       return callback();
     }
     transaction(async (db: SQLiteDatabase) => {
-      try {
-        let sql = 'SELECT json AS metadata FROM ' + DOC_STORE + ' WHERE id = ?';
-        const result = await db.query(sql, [docId]);
-        if (result.values && result.values.length > 0) {
-          const metadata = safeJsonParse(result.values[0].metadata);
-          traverseRevTree(
-            metadata.rev_tree,
-            (_isLeaf: boolean, pos: number, revHash: string, _ctx: any, opts: any) => {
-              const rev = pos + '-' + revHash;
-              if (revs.indexOf(rev) !== -1) {
-                opts.status = 'missing';
-              }
+      let sql = 'SELECT json AS metadata FROM ' + DOC_STORE + ' WHERE id = ?';
+      const result = await db.query(sql, [docId]);
+      if (result.values && result.values.length > 0) {
+        const metadata = safeJsonParse(result.values[0].metadata);
+        traverseRevTree(
+          metadata.rev_tree,
+          (_isLeaf: boolean, pos: number, revHash: string, _ctx: any, opts: any) => {
+            const rev = pos + '-' + revHash;
+            if (revs.indexOf(rev) !== -1) {
+              opts.status = 'missing';
             }
-          );
-          sql = 'UPDATE ' + DOC_STORE + ' SET json = ? WHERE id = ?';
-          await db.run(sql, [safeJsonStringify(metadata), docId]);
+          }
+        );
+        sql = 'UPDATE ' + DOC_STORE + ' SET json = ? WHERE id = ?';
+        await db.run(sql, [safeJsonStringify(metadata), docId]);
 
-          await compactRevs(revs, docId, db);
-        }
-      } catch (e: any) {
-        handleSQLiteError(e, callback);
+        await compactRevs(revs, docId, db);
       }
-      callback();
-    });
+    })
+      .then(() => callback())
+      .catch((error) => handleSQLiteError(error, callback));
+  };
+
+  api._purge = (
+    docId: string,
+    revs: string[],
+    callback: (err: any, response?: any) => void
+  ) => {
+    let documentWasRemovedCompletely = false;
+    transaction(async (db: SQLiteDatabase) => {
+      const result = await db.query('SELECT json FROM ' + DOC_STORE + ' WHERE id=?', [docId]);
+      if (!result.values?.length) {
+        throw createError(MISSING_DOC);
+      }
+
+      const metadata = safeJsonParse(result.values[0].json);
+      for (const rev of revs) {
+        metadata.rev_tree = removeLeafFromTree(metadata.rev_tree, rev);
+      }
+
+      if (metadata.rev_tree.length === 0) {
+        documentWasRemovedCompletely = true;
+        await db.run('DELETE FROM ' + DOC_STORE + ' WHERE id=?', [docId]);
+      } else {
+        const newWinningRev = winningRev(metadata);
+        const winning = await db.query(
+          'SELECT seq FROM ' + BY_SEQ_STORE + ' WHERE doc_id=? AND rev=?',
+          [docId, newWinningRev]
+        );
+        if (!winning.values?.length) {
+          throw createError(MISSING_DOC, 'winning revision missing after purge');
+        }
+        await db.run('UPDATE ' + DOC_STORE + ' SET json=?, winningseq=? WHERE id=?', [
+          safeJsonStringify(metadata),
+          winning.values[0].seq,
+          docId,
+        ]);
+      }
+
+      await compactRevs(revs, docId, db);
+    })
+      .then(() => callback(null, { ok: true, deletedRevs: revs, documentWasRemovedCompletely }))
+      .catch((error) => handleSQLiteError(error, callback));
   };
 
   api._getLocal = (id: string, callback: (err: any, doc?: any) => void) => {

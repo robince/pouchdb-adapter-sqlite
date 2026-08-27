@@ -5,12 +5,12 @@
   "main": "./lib/index.js",
   "exports": {
     ".": {
-      "default": "./lib/index.js",
-      "types": "./lib/index.d.ts"
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
     },
     "./interface": {
-      "default": "./lib/interfaces.js",
-      "types": "./lib/interfaces.d.ts"
+      "types": "./lib/interfaces.d.ts",
+      "default": "./lib/interfaces.js"
     }
   },
   "files": [
