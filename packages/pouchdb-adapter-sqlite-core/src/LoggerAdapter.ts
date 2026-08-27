@@ -49,19 +49,27 @@ export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
     logger.debug(`execute sql %o success`, sql, logParams);
     return result;
   }
+  async transaction(fn: (db: SQLiteAdapter) => Promise<void>) {
+    if (!this.adapter.transaction) {
+      throw new Error('The wrapped SQLite adapter does not support callback transactions');
+    }
+    logger.debug(`transaction`);
+    await this.adapter.transaction(() => fn(this));
+    logger.debug(`transaction success`);
+  }
   async beginTransaction() {
     logger.debug(`beginTransaction`);
-    this.adapter.beginTransaction();
+    await this.adapter.beginTransaction();
     logger.debug(`beginTransaction success`);
   }
   async commitTransaction() {
     logger.debug(`commitTransaction`);
-    this.adapter.commitTransaction();
+    await this.adapter.commitTransaction();
     logger.debug(`commitTransaction success`);
   }
   async rollbackTransaction() {
     logger.debug(`rollbackTransaction`);
-    this.adapter.rollbackTransaction();
+    await this.adapter.rollbackTransaction();
     logger.debug(`rollbackTransaction success`);
   }
 }

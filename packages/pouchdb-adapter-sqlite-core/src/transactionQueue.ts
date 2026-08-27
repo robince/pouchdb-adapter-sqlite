@@ -39,21 +39,26 @@ export class TransactionQueue {
       logger.debug(`---> ${txType} transaction started!`);
 
       try {
-        // Begin transaction
-        await this.db.beginTransaction();
-        await tx.start(this.db);
-        await this.db.commitTransaction();
+        if (this.db.transaction) {
+          await this.db.transaction((db) => tx.start(db));
+        } else {
+          await this.db.beginTransaction();
+          try {
+            await tx.start(this.db);
+            await this.db.commitTransaction();
+          } catch (error) {
+            try {
+              await this.db.rollbackTransaction();
+            } catch (rollbackError) {
+              logger.error('Failed to rollback transaction:', rollbackError);
+            }
+            throw error;
+          }
+        }
 
         // Transaction completed successfully
         tx.finish();
       } catch (error) {
-        // If error occurs, rollback transaction
-        try {
-          await this.db.rollbackTransaction();
-        } catch (rollbackError) {
-          logger.error('Failed to rollback transaction:', rollbackError);
-        }
-
         // Pass error to transaction's finish callback
         tx.finish(error instanceof Error ? error : new Error(String(error)));
       } finally {

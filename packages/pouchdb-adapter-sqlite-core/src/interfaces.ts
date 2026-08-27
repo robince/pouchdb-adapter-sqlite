@@ -48,6 +48,15 @@ export interface SQLiteDatabaseLogger {
  */
 export interface SQLiteDatabase {
   /**
+   * Run a callback in an implementation-native transaction.
+   *
+   * Implementations whose transaction API is callback-scoped (for example,
+   * Cloudflare Durable Object storage) should provide this method instead of
+   * trying to emulate BEGIN/COMMIT across separate calls.
+   */
+  transaction?(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void>;
+
+  /**
    * Execute SQL query and return result set
    * @param sql SQL query statement
    * @param params Query parameters
@@ -142,6 +151,11 @@ export interface BinarySerializer {
 export interface OpenConfig {
   adapter: 'sqlite';
   sqliteImplementation?: string;
+  /**
+   * Disable the process-wide connection cache for request- or instance-scoped
+   * database handles such as Durable Object storage.
+   */
+  useDatabaseCache?: boolean;
   btoa?: (data: any) => any;
   createBlob?: (binary: any, type: any) => any;
   serializer?: BinarySerializer;
@@ -221,6 +235,9 @@ export type OpenDatabaseResult =
  * Creates instances of specific SQLite implementations
  */
 export interface SQLiteImplementationFactory {
+  /** Whether opened handles may be cached process-wide by database name. */
+  useDatabaseCache?: boolean;
+
   /**
    * Open database
    * @param options Database open options

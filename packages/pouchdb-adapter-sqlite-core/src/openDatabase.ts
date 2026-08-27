@@ -43,20 +43,18 @@ export function getSQLiteImplementation(name: string): SQLiteImplementationFacto
  */
 export async function openDatabase(options: any): Promise<OpenDatabaseResult> {
   const cacheKey = options.name;
-
-  // Check if this database connection is already cached
-  const cachedResult = cachedDatabases.get(cacheKey);
-  if (cachedResult) {
-    logger.debug(`Using cached database connection: ${options.name}`);
-    return cachedResult;
-  }
-
-  // Determine which SQLite implementation to use
   const implementationName = options.sqliteImplementation || 'default';
 
   try {
-    // Get SQLite implementation factory
     const factory = getSQLiteImplementation(implementationName);
+    const useDatabaseCache =
+      options.useDatabaseCache !== false && factory.useDatabaseCache !== false;
+
+    const cachedResult = useDatabaseCache ? cachedDatabases.get(cacheKey) : undefined;
+    if (cachedResult) {
+      logger.debug(`Using cached database connection: ${options.name}`);
+      return cachedResult;
+    }
 
     // Use factory to open database
     logger.debug(`Opening database: ${options.name} (using ${implementationName} implementation)`);
@@ -72,7 +70,9 @@ export async function openDatabase(options: any): Promise<OpenDatabaseResult> {
 
     // @ts-ignore
     // Cache the result
-    cachedDatabases.set(cacheKey, r);
+    if (useDatabaseCache) {
+      cachedDatabases.set(cacheKey, r);
+    }
 
     return r;
   } catch (error) {
