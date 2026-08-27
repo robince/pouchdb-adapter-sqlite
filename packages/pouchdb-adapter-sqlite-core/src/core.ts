@@ -445,7 +445,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     const key = 'key' in opts ? opts.key : false;
     const keys = 'keys' in opts ? opts.keys : false;
     const descending = 'descending' in opts ? opts.descending : false;
-    let limit = 'limit' in opts ? opts.limit : -1;
+    const limit = 'limit' in opts ? opts.limit : -1;
     const offset = 'skip' in opts ? opts.skip : 0;
     const inclusiveEnd = opts.inclusive_end !== false;
 
@@ -552,12 +552,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         const totalRows = await countDocs(db);
         const updateSeq = opts.update_seq ? await getMaxSeq(db) : undefined;
 
-        if (limit === 0) {
-          limit = 1;
-        }
-
         if (keys) {
-          let finishedCount = 0;
           const allRows: any[] = [];
           for (const keyChunk of keyChunks) {
             sqlArgs = [];
@@ -570,29 +565,25 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
             criteria.push(DOC_STORE + '.id IN (' + bindingStr + ')');
             sqlArgs = sqlArgs.concat(keyChunk);
 
-            const sql =
-              select(
-                SELECT_DOCS,
-                [DOC_STORE, BY_SEQ_STORE],
-                DOC_STORE_AND_BY_SEQ_JOINER,
-                criteria,
-                DOC_STORE + '.id ' + (descending ? 'DESC' : 'ASC')
-              ) +
-              ' LIMIT ' +
-              limit +
-              ' OFFSET ' +
-              offset;
+            // Pagination belongs to the complete requested key list, not to
+            // each parameter-limited SQL query. PouchDB normally pre-slices
+            // keys, but keeping the adapter operation correct also protects
+            // direct adapter callers.
+            const sql = select(
+              SELECT_DOCS,
+              [DOC_STORE, BY_SEQ_STORE],
+              DOC_STORE_AND_BY_SEQ_JOINER,
+              criteria,
+              DOC_STORE + '.id ' + (descending ? 'DESC' : 'ASC')
+            );
             const result = await db.query(sql, sqlArgs);
-            finishedCount++;
             if (result.values) {
               for (let index = 0; index < result.values.length; index++) {
                 allRows.push(result.values[index]);
               }
             }
-            if (finishedCount === keyChunks.length) {
-              processResult(allRows, results, keys);
-            }
           }
+          processResult(allRows, results, keys);
         } else {
           const sql =
             select(
@@ -619,7 +610,10 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         const returnVal: any = {
           total_rows: totalRows,
           offset: opts.skip,
-          rows: results,
+          rows:
+            keys && (offset > 0 || limit >= 0)
+              ? results.slice(offset, limit < 0 ? undefined : offset + limit)
+              : results,
         };
 
         if (opts.update_seq) {
@@ -848,29 +842,42 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         metadata.rev_tree = removeLeafFromTree(metadata.rev_tree, rev);
       }
 
+      // Remove the purged by-sequence rows before deriving sequence metadata
+      // for the surviving revision tree.
+      await compactRevs(revs, docId, db);
+
       if (metadata.rev_tree.length === 0) {
         documentWasRemovedCompletely = true;
         await db.run('DELETE FROM ' + DOC_STORE + ' WHERE id=?', [docId]);
       } else {
         const newWinningRev = winningRev(metadata);
         const winning = await db.query(
-          'SELECT seq FROM ' + BY_SEQ_STORE + ' WHERE doc_id=? AND rev=?',
-          [docId, newWinningRev]
+          'SELECT seq, (SELECT MAX(seq) FROM ' +
+            BY_SEQ_STORE +
+            ' WHERE doc_id=?) AS max_seq FROM ' +
+            BY_SEQ_STORE +
+            ' WHERE doc_id=? AND rev=?',
+          [docId, docId, newWinningRev]
         );
         if (!winning.values?.length) {
           throw createError(MISSING_DOC, 'winning revision missing after purge');
         }
-        await db.run('UPDATE ' + DOC_STORE + ' SET json=?, winningseq=? WHERE id=?', [
-          safeJsonStringify(metadata),
-          winning.values[0].seq,
-          docId,
-        ]);
+        await db.run(
+          'UPDATE ' + DOC_STORE + ' SET json=?, winningseq=?, max_seq=? WHERE id=?',
+          [safeJsonStringify(metadata), winning.values[0].seq, winning.values[0].max_seq, docId]
+        );
       }
-
-      await compactRevs(revs, docId, db);
     })
       .then(() => callback(null, { ok: true, deletedRevs: revs, documentWasRemovedCompletely }))
-      .catch((error) => handleSQLiteError(error, callback));
+      .catch((error) => {
+        // Preserve intentional PouchDB errors such as MISSING_DOC. Only
+        // translate actual SQLite failures into adapter errors.
+        if (error && typeof error === 'object' && typeof error.status === 'number') {
+          callback(error);
+        } else {
+          handleSQLiteError(error, callback);
+        }
+      });
   };
 
   api._getLocal = (id: string, callback: (err: any, doc?: any) => void) => {
