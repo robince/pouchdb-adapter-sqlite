@@ -1,6 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
+import { openCloudflareDODatabase } from '../src';
+
 function database(name: string) {
   return env.POUCH_DATABASE.getByName(name);
 }
@@ -54,6 +56,36 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     expect(await database('rollback').transactionRollbackProbe()).toBe(0);
   });
 
+  it('reports SQLite affected rows rather than billable storage writes', async () => {
+    expect(await database('run-results').runResultProbe()).toEqual({
+      insertedChanges: 1,
+      insertedId: 1,
+      missingChanges: 0,
+    });
+  });
+
+  it.each(['sql', 'transaction'] as const)(
+    'rejects storage with a non-callable %s method',
+    async (invalidMethod) => {
+      const durableObjectStorage =
+        invalidMethod === 'sql'
+          ? { sql: { exec: true }, transaction: async () => undefined }
+          : { sql: { exec: () => ({}) }, transaction: true };
+      const openOptions = {
+        adapter: 'sqlite' as const,
+        name: 'invalid.db',
+        sqliteImplementation: 'cloudflare-do',
+        durableObjectStorage,
+      };
+
+      const result = await openCloudflareDODatabase(openOptions);
+      expect(result).toHaveProperty(
+        'error.message',
+        'durableObjectStorage must be ctx.storage from a SQLite-backed Durable Object'
+      );
+    }
+  );
+
   it('supports purge and allDocs key sets larger than the DO binding limit', async () => {
     const db = database('purge-and-keys');
     const documents = Array.from({ length: 150 }, (_, index) => ({
@@ -83,6 +115,77 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     expect(await db.getStatus('doc-000')).toBe(404);
   });
 
+  it('purges revision paths larger than the Durable Object parameter limit', async () => {
+    const db = database('deep-purge');
+    const depth = 60;
+    const revisionId = (generation: number) => generation.toString(16).padStart(32, '0');
+    const revisions = Array.from({ length: depth }, (_, index) => {
+      const generation = index + 1;
+      return {
+        _id: 'deep-history',
+        _rev: `${generation}-${revisionId(generation)}`,
+        _revisions: {
+          start: generation,
+          ids: Array.from({ length: generation }, (_value, ancestor) =>
+            revisionId(generation - ancestor)
+          ),
+        },
+      };
+    });
+    const written = await db.bulkDocs(revisions, { new_edits: false });
+    expect(written.every((result) => result.ok)).toBe(true);
+    expect((await db.info()).update_seq).toBe(depth);
+
+    const purged = await db.purge('deep-history', `${depth}-${revisionId(depth)}`);
+    expect(purged.deletedRevs).toHaveLength(depth);
+    expect(purged.documentWasRemovedCompletely).toBe(true);
+    expect((await db.info()).update_seq).toBe(depth);
+  });
+
+  it('removes purged attachment mappings before deleting orphaned bodies', async () => {
+    const db = database('attachment-purge');
+    const created = await db.put({
+      _id: 'shared-attachment',
+      _attachments: {
+        'shared.txt': {
+          content_type: 'text/plain',
+          data: 'c2hhcmVk',
+        },
+      },
+    });
+    const root = await db.get('shared-attachment');
+    const attachment = root._attachments?.['shared.txt'];
+    if (!attachment) {
+      throw new Error('missing attachment stub');
+    }
+    const rootHash = created.rev.slice(created.rev.indexOf('-') + 1);
+    const stub = { ...attachment, stub: true };
+
+    await db.bulkDocs(
+      [
+        {
+          _id: 'shared-attachment',
+          _rev: '2-left',
+          _revisions: { start: 2, ids: ['left', rootHash] },
+          _attachments: { 'shared.txt': stub },
+        },
+        {
+          _id: 'shared-attachment',
+          _rev: '2-right',
+          _revisions: { start: 2, ids: ['right', rootHash] },
+          _attachments: { 'shared.txt': stub },
+        },
+      ],
+      { new_edits: false }
+    );
+
+    await db.purge('shared-attachment', '2-left');
+    expect(await db.attachmentStorageCounts(attachment.digest)).toEqual({ mappings: 2, bodies: 1 });
+
+    const finalPurge = await db.purge('shared-attachment', '2-right');
+    expect(finalPurge.documentWasRemovedCompletely).toBe(true);
+    expect(await db.attachmentStorageCounts(attachment.digest)).toEqual({ mappings: 0, bodies: 0 });
+  });
   it('keeps purge sequence metadata aligned with surviving revisions', async () => {
     const db = database('purge-sequences');
     await db.bulkDocs(
@@ -114,9 +217,15 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     await db.purge('conflicted', '2-right');
 
     const afterPurge = await db.info();
-    expect(afterPurge.update_seq).toBe(2);
+    expect(afterPurge.update_seq).toBe(3);
     expect((await db.get('conflicted'))._rev).toBe('2-left');
     expect((await db.changes({ since: afterPurge.update_seq })).results).toEqual([]);
+
+    await db.put({ _id: 'after-purge' });
+    expect((await db.info()).update_seq).toBe(4);
+    expect(
+      (await db.changes({ since: afterPurge.update_seq })).results.map((row) => row.id)
+    ).toEqual(['after-purge']);
   });
 
   it('preserves PouchDB errors raised inside the purge transaction', async () => {

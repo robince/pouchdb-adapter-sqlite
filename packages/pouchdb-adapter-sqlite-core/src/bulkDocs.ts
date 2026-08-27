@@ -6,11 +6,7 @@ import { MISSING_STUB, createError } from 'pouchdb-errors';
 import { DOC_STORE, BY_SEQ_STORE, ATTACH_STORE, ATTACH_AND_SEQ_STORE } from './constants';
 
 import { select, stringifyDoc, compactRevs, handleSQLiteError, escapeBlob } from './utils';
-import {
-  BinarySerializer,
-  SQLiteLoggerAdapter as SQLiteAdapter,
-  SQLiteDatabase,
-} from './interfaces';
+import { BinarySerializer, SQLiteAdapter, SQLiteDatabase } from './interfaces';
 import { logger } from './logger';
 import { preprocessAttachments } from './processAttachment';
 
@@ -30,6 +26,7 @@ interface DocInfo {
  */
 interface DBOptions {
   revs_limit?: number;
+  maxBoundParameters?: number;
 }
 
 /**
@@ -162,7 +159,7 @@ async function sqliteBulkDocs(
         revsToCompact = compactTree(docInfo.metadata).concat(revsToCompact);
       }
       if (revsToCompact.length) {
-        await compactRevs(revsToCompact, id, db);
+        await compactRevs(revsToCompact, id, db, dbOpts.maxBoundParameters);
       }
 
       docInfo.metadata.seq = seq;
@@ -368,9 +365,9 @@ async function sqliteBulkDocs(
 
   // Execute operations in transaction
   await transaction(async (txn: SQLiteDatabase) => {
+    db = txn;
     await verifyAttachments();
     try {
-      db = txn;
       await fetchExistingDocs();
       await websqlProcessDocs();
       sqliteChanges.notify(api._name);

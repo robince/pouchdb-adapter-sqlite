@@ -15,9 +15,8 @@ const implementationFactories = new Map<string, SQLiteImplementationFactory>();
 interface SharedDatabase {
   db: SQLiteAdapter;
   transactionQueue: TransactionQueueLike;
-  factory: SQLiteImplementationFactory;
-  name: string;
   maxBoundParameters: number;
+  close: () => Promise<void>;
 }
 
 interface CachedDatabase {
@@ -30,14 +29,28 @@ interface CachedDatabase {
 // the same implementation and database share one native connection.
 const cachedDatabases = new Map<string, CachedDatabase>();
 
-function cacheKey(implementationName: string, name: string): string {
-  return JSON.stringify([implementationName, name]);
+function cacheKey(
+  implementationName: string,
+  factory: SQLiteImplementationFactory,
+  options: OpenDatabaseOptions
+): string {
+  const databaseIdentity = factory.getDatabaseCacheKey?.(options) ?? options.name;
+  return JSON.stringify([implementationName, databaseIdentity]);
+}
+
+function maximumBoundParameterCount(factory: SQLiteImplementationFactory): number {
+  const maximum = factory.maxBoundParameters ?? 999;
+  if (!Number.isSafeInteger(maximum) || maximum <= 0) {
+    throw new Error('maxBoundParameters must be a positive safe integer');
+  }
+  return maximum;
 }
 
 async function createSharedDatabase(
   factory: SQLiteImplementationFactory,
   options: OpenDatabaseOptions
 ): Promise<SharedDatabase> {
+  const maxBoundParameters = maximumBoundParameterCount(factory);
   const result = await factory.openDatabase(options);
   if ('error' in result) {
     throw result.error;
@@ -47,9 +60,10 @@ async function createSharedDatabase(
   return {
     db,
     transactionQueue: result.transactionQueue ?? new DefaultTransactionQueue(db),
-    factory,
-    name: options.name,
-    maxBoundParameters: factory.maxBoundParameters ?? 999,
+    maxBoundParameters,
+    close:
+      result.close ??
+      (factory.closeDatabase ? () => factory.closeDatabase!(options.name) : async () => undefined),
   };
 }
 
@@ -60,7 +74,7 @@ function createCacheEntry(
 ): CachedDatabase {
   return {
     shared: afterClose
-      ? afterClose.catch(() => undefined).then(() => createSharedDatabase(factory, options))
+      ? afterClose.then(() => createSharedDatabase(factory, options))
       : createSharedDatabase(factory, options),
     referenceCount: 0,
   };
@@ -126,10 +140,10 @@ export async function openDatabase(options: OpenDatabaseOptions): Promise<OpenDa
     if (!useDatabaseCache) {
       logger.debug(`Opening uncached database: ${options.name} (${implementationName})`);
       const shared = await createSharedDatabase(factory, options);
-      return databaseLease(shared, () => factory.closeDatabase(options.name));
+      return databaseLease(shared, shared.close);
     }
 
-    const key = cacheKey(implementationName, options.name);
+    const key = cacheKey(implementationName, factory, options);
     let cached = cachedDatabases.get(key);
     if (!cached) {
       logger.debug(
@@ -166,7 +180,7 @@ export async function openDatabase(options: OpenDatabaseOptions): Promise<OpenDa
         return;
       }
 
-      const closing = Promise.resolve().then(() => shared.factory.closeDatabase(shared.name));
+      const closing = Promise.resolve().then(shared.close);
       cached.closing = closing;
       try {
         await closing;

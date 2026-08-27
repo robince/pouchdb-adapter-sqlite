@@ -39,7 +39,7 @@ import openDatabase from './openDatabase';
 import {
   BinarySerializer,
   OpenDatabaseOptions,
-  SQLiteLoggerAdapter as SQLiteAdapter,
+  SQLiteAdapter,
   SQLiteDatabase,
   TransactionQueue,
 } from './interfaces';
@@ -78,7 +78,7 @@ const sqliteChanges = new Changes();
 
 // Helper functions
 async function getMaxSeq(db: SQLiteDatabase): Promise<number> {
-  const sql = 'SELECT MAX(seq) AS seq FROM ' + BY_SEQ_STORE;
+  const sql = "SELECT seq FROM sqlite_sequence WHERE name='by-sequence'";
   const res = await db.query(sql, []);
   const updateSeq = res.values && res.values.length > 0 ? (res.values[0].seq as number) || 0 : 0;
   return updateSeq;
@@ -351,7 +351,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('**********bulkDocs!!!!!!!!!!!!!!!!!!!');
     try {
       const response = await sqliteBulkDocs(
-        { revs_limit: undefined },
+        { revs_limit: undefined, maxBoundParameters },
         req,
         reqOpts,
         api,
@@ -816,7 +816,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         sql = 'UPDATE ' + DOC_STORE + ' SET json = ? WHERE id = ?';
         await db.run(sql, [safeJsonStringify(metadata), docId]);
 
-        await compactRevs(revs, docId, db);
+        await compactRevs(revs, docId, db, maxBoundParameters);
       }
     })
       .then(() => callback())
@@ -838,7 +838,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
 
       // Remove the purged by-sequence rows before deriving sequence metadata
       // for the surviving revision tree.
-      await compactRevs(revs, docId, db);
+      await compactRevs(revs, docId, db, maxBoundParameters);
 
       if (metadata.rev_tree.length === 0) {
         documentWasRemovedCompletely = true;

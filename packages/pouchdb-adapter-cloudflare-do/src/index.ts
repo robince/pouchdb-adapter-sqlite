@@ -11,9 +11,6 @@ const cloudflareDOFactory: SQLiteImplementationFactory = {
   useDatabaseCache: false,
   maxBoundParameters: 100,
   openDatabase: openCloudflareDODatabase,
-  async closeDatabase() {
-    // The Durable Object runtime owns the SQLite connection lifecycle.
-  },
 };
 
 /** Register the SQLite core and the Durable Object SQL implementation. */

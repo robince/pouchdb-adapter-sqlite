@@ -97,6 +97,37 @@ export class PouchDatabase extends DurableObject<Env> {
     });
   }
 
+  async runResultProbe(): Promise<{
+    insertedChanges: number;
+    insertedId: number;
+    missingChanges: number;
+  }> {
+    const sql = new CloudflareDODatabase(this.ctx.storage);
+    await sql.execute('CREATE TABLE result_probe (id INTEGER PRIMARY KEY, value TEXT)');
+    await sql.execute('CREATE INDEX result_probe_value ON result_probe (value)');
+    const inserted = await sql.run('INSERT INTO result_probe (value) VALUES (?)', ['value']);
+    const missing = await sql.run('UPDATE result_probe SET value=? WHERE id=?', ['missing', 999]);
+    return {
+      insertedChanges: inserted.changes?.changes ?? -1,
+      insertedId: inserted.changes?.lastId ?? -1,
+      missingChanges: missing.changes?.changes ?? -1,
+    };
+  }
+
+  attachmentStorageCounts(digest: string): { mappings: number; bodies: number } {
+    const mappings = this.ctx.storage.sql
+      .exec<{
+        count: number;
+      }>("SELECT COUNT(*) AS count FROM 'attach-seq-store' WHERE digest=?", digest)
+      .one().count;
+    const bodies = this.ctx.storage.sql
+      .exec<{
+        count: number;
+      }>("SELECT COUNT(*) AS count FROM 'attach-store' WHERE digest=?", digest)
+      .one().count;
+    return { mappings, bodies };
+  }
+
   async transactionRollbackProbe(): Promise<number> {
     const sql = new CloudflareDODatabase(this.ctx.storage);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS rollback_probe (value INTEGER)');

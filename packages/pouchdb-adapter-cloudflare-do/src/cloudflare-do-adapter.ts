@@ -1,7 +1,8 @@
 import type {
+  CallbackTransactionCapability,
   OpenConfig,
   OpenDatabaseOptions,
-  SQLiteAdapter,
+  SQLiteDatabaseConnection,
   SQLiteDatabase,
   SQLiteExecuteResult,
   SQLiteQueryResult,
@@ -50,7 +51,9 @@ export function cloudflareDOOptions(
  * Adapts the synchronous Durable Object SQL API to the promise-shaped core
  * adapter interface. Transactions remain owned by Durable Object storage.
  */
-export class CloudflareDODatabase implements SQLiteAdapter {
+export class CloudflareDODatabase
+  implements SQLiteDatabaseConnection, CallbackTransactionCapability
+{
   constructor(private readonly storage: DurableObjectStorageLike) {}
 
   async query(sql: string, params: unknown[] = []): Promise<SQLiteQueryResult> {
@@ -58,15 +61,18 @@ export class CloudflareDODatabase implements SQLiteAdapter {
   }
 
   async run(sql: string, params: unknown[] = []): Promise<SQLiteExecuteResult> {
-    const cursor = this.storage.sql.exec(sql, ...params);
-    const identity = this.storage.sql
-      .exec<{ lastId: number }>('SELECT last_insert_rowid() AS lastId')
+    this.storage.sql.exec(sql, ...params);
+    const result = this.storage.sql
+      .exec<{
+        changes: number;
+        lastId: number;
+      }>('SELECT changes() AS changes, last_insert_rowid() AS lastId')
       .toArray()[0];
 
     return {
       changes: {
-        changes: cursor.rowsWritten,
-        lastId: identity?.lastId ?? 0,
+        changes: result?.changes ?? 0,
+        lastId: result?.lastId ?? 0,
       },
     };
   }
@@ -78,23 +84,14 @@ export class CloudflareDODatabase implements SQLiteAdapter {
   async transaction(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void> {
     await this.storage.transaction(() => fn(this));
   }
-
-  async beginTransaction(): Promise<void> {
-    throw new Error('Durable Object SQL transactions must use storage.transaction(callback)');
-  }
-
-  async commitTransaction(): Promise<void> {
-    throw new Error('Durable Object SQL transactions are committed by the storage callback');
-  }
-
-  async rollbackTransaction(): Promise<void> {
-    throw new Error('Durable Object SQL transactions are rolled back when the callback throws');
-  }
 }
 
 export async function openCloudflareDODatabase(options: OpenDatabaseOptions) {
   const { durableObjectStorage } = options as CloudflareDOOpenDatabaseOptions;
-  if (!durableObjectStorage?.sql || !durableObjectStorage.transaction) {
+  if (
+    typeof durableObjectStorage?.sql?.exec !== 'function' ||
+    typeof durableObjectStorage.transaction !== 'function'
+  ) {
     return {
       error: new Error(
         'durableObjectStorage must be ctx.storage from a SQLite-backed Durable Object'
@@ -102,5 +99,5 @@ export async function openCloudflareDODatabase(options: OpenDatabaseOptions) {
     };
   }
 
-  return { db: new CloudflareDODatabase(durableObjectStorage) };
+  return { db: new CloudflareDODatabase(durableObjectStorage), close: async () => undefined };
 }

@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run test/adapter.test.ts",
+    "test": "yarn workspace pouchdb-adapter-sqlite-core build && vitest run test/adapter.test.ts",
     "watch": "tsc --watch"
   },
   "keywords": [

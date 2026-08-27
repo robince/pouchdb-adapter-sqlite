@@ -39,9 +39,20 @@ export class TransactionQueue {
       logger.debug(`---> ${txType} transaction started!`);
 
       try {
-        if (this.db.transaction) {
+        if ('transaction' in this.db && typeof this.db.transaction === 'function') {
           await this.db.transaction((db) => tx.start(db));
         } else {
+          if (
+            !('beginTransaction' in this.db) ||
+            typeof this.db.beginTransaction !== 'function' ||
+            !('commitTransaction' in this.db) ||
+            typeof this.db.commitTransaction !== 'function' ||
+            !('rollbackTransaction' in this.db) ||
+            typeof this.db.rollbackTransaction !== 'function'
+          ) {
+            throw new Error('The SQLite adapter does not provide a transaction capability');
+          }
+
           await this.db.beginTransaction();
           try {
             await tx.start(this.db);

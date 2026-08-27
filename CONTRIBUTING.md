@@ -11,9 +11,9 @@ This project uses Yarn as the package manager.
 1. Fork and clone the repo.
 1. Install the dependencies.
 
-   ```shell
-   yarn install
-   ```
+    ```shell
+    yarn install
+    ```
 
 1. Build all the modules
 
@@ -23,5 +23,5 @@ yarn prepack
 
 ### Structure
 
-The five published packages are provided in the `packages` directory. Example applications
+The five published packages are provided in the `packages` directory.   Example applications
 for the supported platforms are in the examples directory.

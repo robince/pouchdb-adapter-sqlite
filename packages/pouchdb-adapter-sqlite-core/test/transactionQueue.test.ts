@@ -31,7 +31,7 @@ describe('TransactionQueue', () => {
     const wrapped = new LoggerSqliteAdapterWarpper(legacyAdapter(events));
     const queue = new TransactionQueue(wrapped);
 
-    expect(wrapped.transaction).toBeUndefined();
+    expect(wrapped.transaction).toBeTypeOf('function');
     await queue.push(async (db) => {
       expect(db).toBe(wrapped);
       events.push('work');
