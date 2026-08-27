@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pouchdb-adapter-current-core-test",
+  "main": "test/current-worker.ts",
+  "compatibility_date": "2026-08-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "CURRENT_POUCH_DATABASE", "class_name": "CurrentPouchDatabase" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["CurrentPouchDatabase"] }
+  ]
+}
