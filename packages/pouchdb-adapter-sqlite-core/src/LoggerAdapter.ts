@@ -3,6 +3,7 @@ import {
   SQLiteAdapter,
   SQLiteLoggerAdapter,
   SQLiteExecuteResult,
+  SQLiteDatabase,
   SQLiteQueryResult,
   SqlLogOptions,
 } from './interfaces';
@@ -15,10 +16,24 @@ export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
     this.serializer = adapter.serializer;
     this.createBlob = adapter.createBlob?.bind(adapter);
     this.btoa = adapter.btoa?.bind(adapter);
+    if (adapter.transaction) {
+      this.transaction = async (fn) => {
+        logger.debug(`transaction`);
+        await adapter.transaction!(async (scopedDb) => {
+          const loggedDb =
+            scopedDb === adapter
+              ? this
+              : new LoggerSqliteAdapterWarpper(scopedDb as SQLiteAdapter);
+          await fn(loggedDb);
+        });
+        logger.debug(`transaction success`);
+      };
+    }
   }
   serializer?: BinarySerializer | undefined;
   createBlob?: ((binary: any, type: any) => any) | undefined;
   btoa?: ((data: any) => any) | undefined;
+  transaction?: (fn: (db: SQLiteDatabase) => Promise<void>) => Promise<void>;
   query(sql: string, params?: any[], opt?: SqlLogOptions): Promise<SQLiteQueryResult> {
     const logParams = opt?.params ?? params;
 
@@ -48,14 +63,6 @@ export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
     const result = this.adapter.execute(sql);
     logger.debug(`execute sql %o success`, sql, logParams);
     return result;
-  }
-  async transaction(fn: (db: SQLiteAdapter) => Promise<void>) {
-    if (!this.adapter.transaction) {
-      throw new Error('The wrapped SQLite adapter does not support callback transactions');
-    }
-    logger.debug(`transaction`);
-    await this.adapter.transaction(() => fn(this));
-    logger.debug(`transaction success`);
   }
   async beginTransaction() {
     logger.debug(`beginTransaction`);
