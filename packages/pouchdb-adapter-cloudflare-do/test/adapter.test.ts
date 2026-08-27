@@ -70,9 +70,7 @@ describe('PouchDB Durable Object SQLite adapter', () => {
       skip: 5,
       limit: 10,
     });
-    expect(paged.rows.map((row) => row.id)).toEqual(
-      documents.slice(5, 15).map((doc) => doc._id)
-    );
+    expect(paged.rows.map((row) => row.id)).toEqual(documents.slice(5, 15).map((doc) => doc._id));
 
     expect((await db.allDocs({ keys: [] })).rows).toEqual([]);
 

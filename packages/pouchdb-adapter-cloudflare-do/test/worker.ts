@@ -1,10 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import PouchDB from 'pouchdb-core';
 
-import cloudflareDOAdapter, {
-  CloudflareDODatabase,
-  type DurableObjectStorageLike,
-} from '../src';
+import cloudflareDOAdapter, { CloudflareDODatabase, type DurableObjectStorageLike } from '../src';
 
 PouchDB.plugin(cloudflareDOAdapter);
 
@@ -47,10 +44,7 @@ export class PouchDatabase extends DurableObject<Env> {
     return this.db.remove(id, rev);
   }
 
-  async bulkDocs(
-    docs: Array<Record<string, unknown>>,
-    options?: PouchDB.Core.BulkDocsOptions
-  ) {
+  async bulkDocs(docs: Array<Record<string, unknown>>, options?: PouchDB.Core.BulkDocsOptions) {
     return this.db.bulkDocs(docs, options);
   }
 
@@ -67,13 +61,18 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async purge(id: string, rev: string) {
-    return (this.db as PouchDB.Database & {
-      purge(id: string, rev: string): Promise<{
-        ok: boolean;
-        deletedRevs: string[];
-        documentWasRemovedCompletely: boolean;
-      }>;
-    }).purge(id, rev);
+    return (
+      this.db as PouchDB.Database & {
+        purge(
+          id: string,
+          rev: string
+        ): Promise<{
+          ok: boolean;
+          deletedRevs: string[];
+          documentWasRemovedCompletely: boolean;
+        }>;
+      }
+    ).purge(id, rev);
   }
 
   async rawAllDocs(options: Record<string, unknown>): Promise<PouchDB.Core.AllDocsResponse<{}>> {
