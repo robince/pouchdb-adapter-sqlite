@@ -21,9 +21,7 @@ export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
         logger.debug(`transaction`);
         await adapter.transaction!(async (scopedDb) => {
           const loggedDb =
-            scopedDb === adapter
-              ? this
-              : new LoggerSqliteAdapterWarpper(scopedDb as SQLiteAdapter);
+            scopedDb === adapter ? this : new LoggerSqliteAdapterWarpper(scopedDb as SQLiteAdapter);
           await fn(loggedDb);
         });
         logger.debug(`transaction success`);

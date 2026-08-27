@@ -825,11 +825,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       .catch((error) => handleSQLiteError(error, callback));
   };
 
-  api._purge = (
-    docId: string,
-    revs: string[],
-    callback: (err: any, response?: any) => void
-  ) => {
+  api._purge = (docId: string, revs: string[], callback: (err: any, response?: any) => void) => {
     let documentWasRemovedCompletely = false;
     transaction(async (db: SQLiteDatabase) => {
       const result = await db.query('SELECT json FROM ' + DOC_STORE + ' WHERE id=?', [docId]);
@@ -862,10 +858,12 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         if (!winning.values?.length) {
           throw createError(MISSING_DOC, 'winning revision missing after purge');
         }
-        await db.run(
-          'UPDATE ' + DOC_STORE + ' SET json=?, winningseq=?, max_seq=? WHERE id=?',
-          [safeJsonStringify(metadata), winning.values[0].seq, winning.values[0].max_seq, docId]
-        );
+        await db.run('UPDATE ' + DOC_STORE + ' SET json=?, winningseq=?, max_seq=? WHERE id=?', [
+          safeJsonStringify(metadata),
+          winning.values[0].seq,
+          winning.values[0].max_seq,
+          docId,
+        ]);
       }
     })
       .then(() => callback(null, { ok: true, deletedRevs: revs, documentWasRemovedCompletely }))

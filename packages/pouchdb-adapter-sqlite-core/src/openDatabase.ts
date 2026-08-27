@@ -112,7 +112,9 @@ export async function openDatabase(options: OpenDatabaseOptions): Promise<OpenDa
     const key = cacheKey(implementationName, options.name);
     let sharedPromise = cachedDatabases.get(key);
     if (!sharedPromise) {
-      logger.debug(`Opening database: ${options.name} (using ${implementationName} implementation)`);
+      logger.debug(
+        `Opening database: ${options.name} (using ${implementationName} implementation)`
+      );
       sharedPromise = createSharedDatabase(factory, options);
       cachedDatabases.set(key, sharedPromise);
     } else {
