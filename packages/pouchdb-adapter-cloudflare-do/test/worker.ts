@@ -11,6 +11,7 @@ export interface Env {
 
 export class PouchDatabase extends DurableObject<Env> {
   private readonly db: PouchDB.Database;
+  private temporaryHandleCloses = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -73,20 +74,42 @@ export class PouchDatabase extends DurableObject<Env> {
 
   async purgeOnFreshHandle(id: string, rev: string) {
     const fresh = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
-    const result = await (
-      fresh as PouchDB.Database & {
-        purge(
-          id: string,
-          rev: string
-        ): Promise<{
-          ok: boolean;
-          deletedRevs: string[];
-          documentWasRemovedCompletely: boolean;
-        }>;
+    try {
+      return await (
+        fresh as PouchDB.Database & {
+          purge(
+            id: string,
+            rev: string
+          ): Promise<{
+            ok: boolean;
+            deletedRevs: string[];
+            documentWasRemovedCompletely: boolean;
+          }>;
+        }
+      ).purge(id, rev);
+    } finally {
+      await fresh.close();
+      this.temporaryHandleCloses++;
+    }
+  }
+
+  async temporaryHandleFailureProbe(
+    operation: 'purge' | 'auto-compaction'
+  ): Promise<{ rejected: boolean; closed: boolean }> {
+    const closesBefore = this.temporaryHandleCloses;
+    try {
+      if (operation === 'purge') {
+        await this.purgeOnFreshHandle('missing', '1-missing');
+      } else {
+        await this.autoCompactionProbe('_invalid');
       }
-    ).purge(id, rev);
-    await fresh.close();
-    return result;
+      return { rejected: false, closed: false };
+    } catch {
+      return {
+        rejected: true,
+        closed: this.temporaryHandleCloses === closesBefore + 1,
+      };
+    }
   }
 
   async rawAllDocs(options: Record<string, unknown>): Promise<PouchDB.Core.AllDocsResponse<{}>> {
@@ -164,21 +187,26 @@ export class PouchDatabase extends DurableObject<Env> {
       .one().count;
   }
 
-  async autoCompactionProbe(): Promise<number> {
+  async autoCompactionProbe(id = 'auto-compact'): Promise<number> {
     const db = new PouchDB('db', {
       ...cloudflareDOOptions(this.ctx.storage),
       auto_compaction: true,
     });
-    let doc = await db.get('auto-compact').catch(() => ({ _id: 'auto-compact' }));
-    await db.put({ ...doc, value: 1 });
-    doc = await db.get('auto-compact');
-    await db.put({ ...doc, value: 2 });
+    try {
+      let doc = await db.get(id).catch(() => ({ _id: id }));
+      await db.put({ ...doc, value: 1 });
+      doc = await db.get(id);
+      await db.put({ ...doc, value: 2 });
 
-    return this.ctx.storage.sql
-      .exec<{
-        count: number;
-      }>("SELECT COUNT(*) AS count FROM 'by-sequence' WHERE doc_id=?", 'auto-compact')
-      .one().count;
+      return this.ctx.storage.sql
+        .exec<{
+          count: number;
+        }>("SELECT COUNT(*) AS count FROM 'by-sequence' WHERE doc_id=?", id)
+        .one().count;
+    } finally {
+      await db.close();
+      this.temporaryHandleCloses++;
+    }
   }
 }
 

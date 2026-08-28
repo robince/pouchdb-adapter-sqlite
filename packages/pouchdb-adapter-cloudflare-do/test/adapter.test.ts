@@ -88,6 +88,18 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     expect(await database('auto-compaction').autoCompactionProbe()).toBe(1);
   });
 
+  it.each(['purge', 'auto-compaction'] as const)(
+    'closes the temporary handle when the %s probe fails',
+    async (probe) => {
+      expect(await database(`temporary-close-${probe}`).temporaryHandleFailureProbe(probe)).toEqual(
+        {
+          rejected: true,
+          closed: true,
+        }
+      );
+    }
+  );
+
   it('reports SQLite affected rows rather than billable storage writes', async () => {
     expect(await database('run-results').runResultProbe()).toEqual({
       insertedChanges: 1,
@@ -229,6 +241,28 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     const finalPurge = await db.purge('shared-attachment', '2-right');
     expect(finalPurge.documentWasRemovedCompletely).toBe(true);
     expect(await db.attachmentStorageCounts(attachment.digest)).toEqual({ mappings: 0, bodies: 0 });
+  });
+
+  it('does not duplicate attachment mappings when an existing revision is replayed', async () => {
+    const db = database('attachment-replay');
+    await db.put({
+      _id: 'attached',
+      _attachments: {
+        'file.txt': {
+          content_type: 'text/plain',
+          data: 'cmVwbGF5',
+        },
+      },
+    });
+    const revision = await db.get('attached', { revs: true });
+    const attachment = revision._attachments?.['file.txt'];
+    if (!attachment) {
+      throw new Error('missing attachment stub');
+    }
+
+    await db.bulkDocs([revision], { new_edits: false });
+
+    expect(await db.attachmentStorageCounts(attachment.digest)).toEqual({ mappings: 1, bodies: 1 });
   });
   it('keeps purge sequence metadata aligned with surviving revisions', async () => {
     const db = database('purge-sequences');

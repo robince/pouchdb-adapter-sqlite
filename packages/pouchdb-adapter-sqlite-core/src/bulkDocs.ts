@@ -245,6 +245,7 @@ async function sqliteBulkDocs(
     const sqlArgs = [id, rev, json, deletedInt];
 
     let seq: number;
+    let recoveredExistingSequence = false;
     try {
       const result = await db.run(sql, sqlArgs);
       const insertedSeq = result.changes?.lastId;
@@ -258,6 +259,7 @@ async function sqliteBulkDocs(
       const res = await db.query(fetchSql, [id, rev]);
       if (res.values && res.values.length > 0) {
         seq = res.values[0].seq as number;
+        recoveredExistingSequence = true;
         logger.debug(
           `Encountered constraint error, switching to update: seq=${seq}, id=${id}, rev=${rev}`
         );
@@ -272,7 +274,9 @@ async function sqliteBulkDocs(
     // Only the initial by-sequence INSERT participates in conflict recovery.
     // Failures in attachment mapping, compaction, or document metadata must
     // abort the transaction rather than being mistaken for UNIQUE conflicts.
-    await insertAttachmentMappings(seq);
+    if (!recoveredExistingSequence) {
+      await insertAttachmentMappings(seq);
+    }
     await dataWritten(db, seq);
   }
 

@@ -40,6 +40,43 @@ describe('TransactionQueue', () => {
     expect(events).toEqual(['begin', 'work', 'commit']);
   });
 
+  it('awaits an asynchronous begin and commit around the statements', async () => {
+    // A native bridge settles its transaction calls on a later tick. If begin
+    // and commit are not awaited, statements can escape the transaction and
+    // stray BEGIN/COMMIT calls can collide on the connection.
+    const events: string[] = [];
+    const laterTick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const bridged: SQLiteAdapter = {
+      async query() {
+        return { values: [] };
+      },
+      async run() {
+        events.push('run');
+        return { changes: { changes: 0, lastId: 0 } };
+      },
+      async execute() {},
+      async beginTransaction() {
+        await laterTick();
+        events.push('begin');
+      },
+      async commitTransaction() {
+        await laterTick();
+        events.push('commit');
+      },
+      async rollbackTransaction() {
+        await laterTick();
+        events.push('rollback');
+      },
+    };
+
+    const queue = new TransactionQueue(new LoggerSqliteAdapterWarpper(bridged));
+    await queue.push(async (db) => {
+      await db.run('INSERT INTO t VALUES (1)');
+    });
+
+    expect(events).toEqual(['begin', 'run', 'commit']);
+  });
+
   it('rolls back failed legacy transactions', async () => {
     const events: string[] = [];
     const wrapped = new LoggerSqliteAdapterWarpper(legacyAdapter(events));
