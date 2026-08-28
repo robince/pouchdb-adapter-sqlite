@@ -669,60 +669,83 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         '.winningseq=' +
         BY_SEQ_STORE +
         '.seq';
-      const criteria = ['maxSeq > ?'];
-      const sqlArgs = [opts.since];
-
-      if (opts.doc_ids) {
-        criteria.push(DOC_STORE + '.id IN ' + qMarks(opts.doc_ids.length));
-        sqlArgs.push(...opts.doc_ids);
-      }
-
       const orderBy = 'maxSeq ' + (descending ? 'DESC' : 'ASC');
-      let sql = select(selectStmt, from, joiner, criteria, orderBy);
       const filter = filterChange(opts);
-
-      if (!opts.view && !opts.filter) {
-        sql += ' LIMIT ' + limit;
-      }
 
       let lastSeq = opts.since || 0;
       readTransaction(async (db: SQLiteDatabase) => {
         try {
-          const result = await db.query(sql, sqlArgs);
-
-          if (result.values) {
-            for (let i = 0, l = result.values.length; i < l; i++) {
-              const item = result.values[i];
-              const metadata = safeJsonParse(item.metadata);
-              lastSeq = item.maxSeq;
-
-              const doc = unstringifyDoc(
-                item.winningDoc as string,
-                metadata.id,
-                item.winningRev as string
+          const queryChunks: Array<string[] | undefined> = [];
+          if (opts.doc_ids) {
+            const distinctDocIds = Array.from(new Set<string>(opts.doc_ids));
+            const docIdsPerChunk = maxBoundParameters - 1;
+            if (distinctDocIds.length && docIdsPerChunk < 1) {
+              throw new Error(
+                'maxBoundParameters must allow both since and a document ID for changes'
               );
-              const change = opts.processChange(doc, metadata, opts);
-              change.seq = item.maxSeq;
+            }
+            for (let index = 0; index < distinctDocIds.length; index += docIdsPerChunk) {
+              queryChunks.push(distinctDocIds.slice(index, index + docIdsPerChunk));
+            }
+          } else {
+            queryChunks.push(undefined);
+          }
 
-              const filtered = filter(change);
-              if (typeof filtered === 'object') {
-                return opts.complete(filtered);
-              }
+          const rowsByMaxSequence = new Map<number, any>();
+          for (const docIdChunk of queryChunks) {
+            const criteria = ['maxSeq > ?'];
+            const sqlArgs = [opts.since];
+            if (docIdChunk) {
+              criteria.push(DOC_STORE + '.id IN ' + qMarks(docIdChunk.length));
+              sqlArgs.push(...docIdChunk);
+            }
 
-              if (filtered) {
-                numResults++;
-                if (opts.return_docs) {
-                  results.push(change);
-                }
-                if (opts.attachments && opts.include_docs) {
-                  fetchAttachmentsIfNecessary(doc, opts, api, db, () => opts.onChange(change));
-                } else {
-                  opts.onChange(change);
-                }
+            let sql = select(selectStmt, from, joiner, criteria, orderBy);
+            if (queryChunks.length === 1 && !opts.view && !opts.filter) {
+              sql += ' LIMIT ' + limit;
+            }
+
+            const result = await db.query(sql, sqlArgs);
+            for (const row of result.values ?? []) {
+              rowsByMaxSequence.set(Number(row.maxSeq), row);
+            }
+          }
+
+          const rows = Array.from(rowsByMaxSequence.values()).sort((left, right) => {
+            const difference = Number(left.maxSeq) - Number(right.maxSeq);
+            return descending ? -difference : difference;
+          });
+
+          for (const item of rows) {
+            const metadata = safeJsonParse(item.metadata);
+            lastSeq = item.maxSeq;
+
+            const doc = unstringifyDoc(
+              item.winningDoc as string,
+              metadata.id,
+              item.winningRev as string
+            );
+            const change = opts.processChange(doc, metadata, opts);
+            change.seq = item.maxSeq;
+
+            const filtered = filter(change);
+            if (typeof filtered === 'object') {
+              return opts.complete(filtered);
+            }
+
+            if (filtered) {
+              numResults++;
+              if (opts.return_docs) {
+                results.push(change);
               }
-              if (numResults === limit) {
-                break;
+              if (opts.attachments && opts.include_docs) {
+                fetchAttachmentsIfNecessary(doc, opts, api, db, () => opts.onChange(change));
+              } else {
+                opts.onChange(change);
               }
+            }
+            if (numResults === limit) {
+              break;
             }
           }
 

@@ -43,6 +43,34 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     expect(changes.last_seq).toBe(3);
   });
 
+  it('batches changes doc_ids while preserving global sequence order and limit', async () => {
+    const db = database('changes-doc-ids');
+    const documents = Array.from({ length: 130 }, (_, index) => ({
+      _id: `doc-${String(index).padStart(3, '0')}`,
+      value: index,
+    }));
+    await db.bulkDocs(documents);
+
+    const docIds = documents.map((doc) => doc._id).reverse();
+    docIds.push('doc-100');
+    const allChanges = await db.changes({ since: 20, doc_ids: docIds });
+    expect(allChanges.results).toHaveLength(110);
+    expect(allChanges.results[0].id).toBe('doc-020');
+    expect(allChanges.results.at(-1)?.id).toBe('doc-129');
+    expect(allChanges.last_seq).toBe(130);
+
+    const changes = await db.changes({
+      since: 20,
+      doc_ids: docIds,
+      limit: 10,
+    });
+
+    expect(changes.results.map((change) => change.id)).toEqual(
+      documents.slice(20, 30).map((doc) => doc._id)
+    );
+    expect(changes.last_seq).toBe(30);
+  });
+
   it('keeps identically named PouchDB databases isolated by Durable Object', async () => {
     const left = database('isolation-left');
     const right = database('isolation-right');
