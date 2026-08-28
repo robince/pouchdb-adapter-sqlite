@@ -71,6 +71,24 @@ export class PouchDatabase extends DurableObject<Env> {
     ).purge(id, rev);
   }
 
+  async purgeOnFreshHandle(id: string, rev: string) {
+    const fresh = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+    const result = await (
+      fresh as PouchDB.Database & {
+        purge(
+          id: string,
+          rev: string
+        ): Promise<{
+          ok: boolean;
+          deletedRevs: string[];
+          documentWasRemovedCompletely: boolean;
+        }>;
+      }
+    ).purge(id, rev);
+    await fresh.close();
+    return result;
+  }
+
   async rawAllDocs(options: Record<string, unknown>): Promise<PouchDB.Core.AllDocsResponse<{}>> {
     return new Promise((resolve, reject) => {
       (this.db as any)._allDocs(options, (error: unknown, response: unknown) => {
@@ -143,6 +161,23 @@ export class PouchDatabase extends DurableObject<Env> {
     }
     return this.ctx.storage.sql
       .exec<{ count: number }>('SELECT COUNT(*) AS count FROM rollback_probe')
+      .one().count;
+  }
+
+  async autoCompactionProbe(): Promise<number> {
+    const db = new PouchDB('db', {
+      ...cloudflareDOOptions(this.ctx.storage),
+      auto_compaction: true,
+    });
+    let doc = await db.get('auto-compact').catch(() => ({ _id: 'auto-compact' }));
+    await db.put({ ...doc, value: 1 });
+    doc = await db.get('auto-compact');
+    await db.put({ ...doc, value: 2 });
+
+    return this.ctx.storage.sql
+      .exec<{
+        count: number;
+      }>("SELECT COUNT(*) AS count FROM 'by-sequence' WHERE doc_id=?", 'auto-compact')
       .one().count;
   }
 }

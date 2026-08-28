@@ -2,15 +2,15 @@ import {
   BinarySerializer,
   SQLiteLoggerAdapter,
   SQLiteExecuteResult,
-  SQLiteDatabase,
+  TransactionalSQLiteDatabase,
   SQLiteQueryResult,
   SqlLogOptions,
 } from './interfaces';
 import { logger } from './logger';
 
 export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
-  private adapter: SQLiteDatabase;
-  constructor(adapter: SQLiteDatabase) {
+  private adapter: TransactionalSQLiteDatabase;
+  constructor(adapter: TransactionalSQLiteDatabase) {
     this.adapter = adapter;
     if ('serializer' in adapter) {
       this.serializer = adapter.serializer as BinarySerializer | undefined;
@@ -25,7 +25,7 @@ export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
   serializer?: BinarySerializer | undefined;
   createBlob?: ((binary: any, type: any) => any) | undefined;
   btoa?: ((data: any) => any) | undefined;
-  async transaction(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void> {
+  async transaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void> {
     logger.debug(`transaction`);
     if ('transaction' in this.adapter && typeof this.adapter.transaction === 'function') {
       await this.adapter.transaction(async (scopedDb) => {

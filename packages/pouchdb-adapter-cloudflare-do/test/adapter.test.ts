@@ -84,6 +84,10 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     expect(await database('rollback').transactionRollbackProbe()).toBe(0);
   });
 
+  it('honours PouchDB auto-compaction options', async () => {
+    expect(await database('auto-compaction').autoCompactionProbe()).toBe(1);
+  });
+
   it('reports SQLite affected rows rather than billable storage writes', async () => {
     expect(await database('run-results').runResultProbe()).toEqual({
       insertedChanges: 1,
@@ -141,6 +145,18 @@ describe('PouchDB Durable Object SQLite adapter', () => {
       documentWasRemovedCompletely: true,
     });
     expect(await db.getStatus('doc-000')).toBe(404);
+  });
+
+  it('routes purge through revision-tree lookup when it is the first operation', async () => {
+    const db = database('fresh-handle-purge');
+    const created = await db.put({ _id: 'purge-first' });
+
+    expect(await db.purgeOnFreshHandle('purge-first', created.rev)).toMatchObject({
+      ok: true,
+      deletedRevs: [created.rev],
+      documentWasRemovedCompletely: true,
+    });
+    expect(await db.getStatus('purge-first')).toBe(404);
   });
 
   it('purges revision paths larger than the Durable Object parameter limit', async () => {

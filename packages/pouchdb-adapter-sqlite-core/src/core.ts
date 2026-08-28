@@ -39,8 +39,8 @@ import openDatabase from './openDatabase';
 import {
   BinarySerializer,
   OpenDatabaseOptions,
-  SQLiteAdapter,
-  SQLiteDatabase,
+  TransactionalSQLiteAdapter,
+  TransactionalSQLiteDatabase,
   TransactionQueue,
 } from './interfaces';
 import { logger } from './logger';
@@ -77,14 +77,14 @@ const SELECT_DOCS =
 const sqliteChanges = new Changes();
 
 // Helper functions
-async function getMaxSeq(db: SQLiteDatabase): Promise<number> {
+async function getMaxSeq(db: TransactionalSQLiteDatabase): Promise<number> {
   const sql = "SELECT seq FROM sqlite_sequence WHERE name='by-sequence'";
   const res = await db.query(sql, []);
   const updateSeq = res.values && res.values.length > 0 ? (res.values[0].seq as number) || 0 : 0;
   return updateSeq;
 }
 
-async function countDocs(db: SQLiteDatabase): Promise<number> {
+async function countDocs(db: TransactionalSQLiteDatabase): Promise<number> {
   const sql = select(
     'COUNT(' + DOC_STORE + ".id) AS 'num'",
     [DOC_STORE, BY_SEQ_STORE],
@@ -96,7 +96,7 @@ async function countDocs(db: SQLiteDatabase): Promise<number> {
 }
 
 async function latest(
-  db: SQLiteDatabase,
+  db: TransactionalSQLiteDatabase,
   id: string,
   rev: string,
   callback: (latestRev: string) => void,
@@ -128,7 +128,7 @@ function fetchAttachmentsIfNecessary(
   doc: any,
   opts: any,
   api: any,
-  db: SQLiteDatabase,
+  db: TransactionalSQLiteDatabase,
   cb?: () => void
 ) {
   const attachments = Object.keys(doc._attachments || {});
@@ -165,14 +165,13 @@ function fetchAttachmentsIfNecessary(
 function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   // @ts-ignore
   const api = this as any;
-  let db: SQLiteAdapter;
+  let db: TransactionalSQLiteAdapter;
   // @ts-ignore
   let txnQueue: TransactionQueue;
   let instanceId: string;
   let closeDatabaseLease: (() => Promise<void>) | undefined;
   let maxBoundParameters = 999;
   let encoding: string = 'UTF-8';
-  api.auto_compaction = false;
 
   api._name = opts.name;
 
@@ -206,11 +205,11 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       handleSQLiteError(error, cb);
     });
 
-  async function transaction(fn: (db: SQLiteDatabase) => Promise<void>) {
+  async function transaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>) {
     return txnQueue.push(fn);
   }
 
-  async function readTransaction(fn: (db: SQLiteDatabase) => Promise<void>) {
+  async function readTransaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>) {
     return txnQueue.pushReadOnly(fn);
   }
 
@@ -228,7 +227,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
   }
 
-  async function checkEncoding(db: SQLiteDatabase) {
+  async function checkEncoding(db: TransactionalSQLiteDatabase) {
     const res = await db.query("SELECT HEX('a') AS hex");
     if (res.values && res.values.length > 0) {
       const hex = res.values[0].hex as string;
@@ -236,7 +235,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
   }
 
-  async function fetchVersion(db: SQLiteDatabase) {
+  async function fetchVersion(db: TransactionalSQLiteDatabase) {
     logger.debug('Fetching version');
     const sql = 'SELECT sql FROM sqlite_master WHERE tbl_name = ' + META_STORE;
 
@@ -257,7 +256,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
   }
 
-  async function onGetVersion(db: SQLiteDatabase, dbVersion: number) {
+  async function onGetVersion(db: TransactionalSQLiteDatabase, dbVersion: number) {
     if (dbVersion === 0) {
       await createInitialSchema(db);
     } else {
@@ -265,7 +264,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
   }
 
-  async function createInitialSchema(db: SQLiteDatabase) {
+  async function createInitialSchema(db: TransactionalSQLiteDatabase) {
     logger.debug('Creating initial schema');
     const meta = 'CREATE TABLE IF NOT EXISTS ' + META_STORE + ' (dbid, db_version INTEGER)';
     const attach =
@@ -307,7 +306,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('Creation successful');
   }
 
-  async function runMigrations(db: SQLiteDatabase, dbVersion: number) {
+  async function runMigrations(db: TransactionalSQLiteDatabase, dbVersion: number) {
     // Migration logic can be added here
 
     const migrated = dbVersion < ADAPTER_VERSION;
@@ -332,7 +331,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._info = (callback: (err: any, info?: any) => void) => {
-    readTransaction(async (db: SQLiteDatabase) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
       try {
         const seq = await getMaxSeq(db);
         const docCount = await countDocs(db);
@@ -351,7 +350,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('**********bulkDocs!!!!!!!!!!!!!!!!!!!');
     try {
       const response = await sqliteBulkDocs(
-        { revs_limit: undefined, maxBoundParameters },
+        { revs_limit: opts.revs_limit, maxBoundParameters },
         req,
         reqOpts,
         api,
@@ -368,7 +367,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('get:', id);
     let doc: any;
     let metadata: any;
-    const db: SQLiteDatabase = opts.ctx;
+    const db: TransactionalSQLiteDatabase = opts.ctx;
     if (!db) {
       readTransaction(async (txn) => {
         return new Promise((resolve) => {
@@ -495,7 +494,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       criteria.push(BY_SEQ_STORE + '.deleted = 0');
     }
 
-    readTransaction(async (db: SQLiteDatabase) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
       const processResult = (rows: any[], results: any[], keys: any) => {
         for (let i = 0, l = rows.length; i < l; i++) {
           const item = rows[i];
@@ -641,10 +640,11 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     const descending = opts.descending;
     opts.since = opts.since && !descending ? opts.since : 0;
     let limit = 'limit' in opts ? opts.limit : -1;
+    // Match pouchdb-core, which normalizes a public changes limit of zero to
+    // one before dispatching to adapters.
     if (limit === 0) {
       limit = 1;
     }
-
     const results: any[] = [];
     let numResults = 0;
 
@@ -673,7 +673,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       const filter = filterChange(opts);
 
       let lastSeq = opts.since || 0;
-      readTransaction(async (db: SQLiteDatabase) => {
+      readTransaction(async (db: TransactionalSQLiteDatabase) => {
         try {
           const queryChunks: Array<string[] | undefined> = [];
           if (opts.doc_ids) {
@@ -765,7 +765,11 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._close = (callback: (err?: any) => void) => {
-    (closeDatabaseLease?.() ?? Promise.resolve())
+    // PouchDB marks the instance closed before invoking this hook, so no new
+    // public operation can join the queue. A queued no-op therefore acts as a
+    // barrier for every transaction already accepted by the adapter.
+    readTransaction(async () => undefined)
+      .then(() => closeDatabaseLease?.())
       .then(() => callback())
       .catch((err) => callback(err));
   };
@@ -778,17 +782,17 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     callback: (err: any, response?: any) => void
   ) => {
     let res: any;
-    const db: SQLiteAdapter = opts.ctx;
+    const db: TransactionalSQLiteAdapter = opts.ctx;
     const digest = attachment.digest;
     const type = attachment.content_type;
     const sql = 'SELECT escaped, body AS body FROM ' + ATTACH_STORE + ' WHERE digest=?';
     db.query(sql, [digest], { notlogResult: true })
-      .then((result) => {
+      .then(async (result) => {
         if (result.values && result.values.length > 0) {
           const item = result.values[0];
           let data = item.body;
           if (item.escaped && serializer) {
-            data = serializer.deserialize(data);
+            data = await serializer.deserialize(data);
           }
           if (opts.binary) {
             res = createBlob(data, type);
@@ -806,7 +810,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._getRevisionTree = (docId: string, callback: (err: any, rev_tree?: any) => void) => {
-    readTransaction(async (db: SQLiteDatabase) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
       const sql = 'SELECT json AS metadata FROM ' + DOC_STORE + ' WHERE id = ?';
       const result = await db.query(sql, [docId]);
       if (!result.values?.length) {
@@ -822,7 +826,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     if (!revs.length) {
       return callback();
     }
-    transaction(async (db: SQLiteDatabase) => {
+    transaction(async (db: TransactionalSQLiteDatabase) => {
       let sql = 'SELECT json AS metadata FROM ' + DOC_STORE + ' WHERE id = ?';
       const result = await db.query(sql, [docId]);
       if (result.values && result.values.length > 0) {
@@ -846,9 +850,22 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       .catch((error) => handleSQLiteError(error, callback));
   };
 
-  api._purge = (docId: string, revs: string[], callback: (err: any, response?: any) => void) => {
+  api._purge = (
+    docId: string,
+    revs: string[] | string,
+    callback: (err: any, response?: any) => void
+  ) => {
+    // adapterFun() redispatches a call made before adapter setup using its
+    // registered name. PouchDB registers public purge under "_purge", so that
+    // first redispatch bypasses its revision-tree wrapper and arrives here with
+    // the caller's leaf revision string. Send it back through the now-ready
+    // public method so PouchDB derives the full leaf-to-root path exactly once.
+    if (typeof revs === 'string') {
+      return api.purge(docId, revs, callback);
+    }
+
     let documentWasRemovedCompletely = false;
-    transaction(async (db: SQLiteDatabase) => {
+    transaction(async (db: TransactionalSQLiteDatabase) => {
       const result = await db.query('SELECT json FROM ' + DOC_STORE + ' WHERE id=?', [docId]);
       if (!result.values?.length) {
         throw createError(MISSING_DOC);
@@ -900,7 +917,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._getLocal = (id: string, callback: (err: any, doc?: any) => void) => {
-    readTransaction(async (db: SQLiteDatabase) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
       try {
         const sql = 'SELECT json, rev FROM ' + LOCAL_STORE + ' WHERE id=?';
         const res = await db.query(sql, [id]);
@@ -935,7 +952,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     const json = stringifyDoc(doc);
 
     let ret: any;
-    const putLocal = async (db: SQLiteDatabase) => {
+    const putLocal = async (db: TransactionalSQLiteDatabase) => {
       try {
         let sql: string;
         let values: any[];
@@ -972,7 +989,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
     let ret: any;
 
-    const removeLocal = async (db: SQLiteDatabase) => {
+    const removeLocal = async (db: TransactionalSQLiteDatabase) => {
       try {
         const sql = 'DELETE FROM ' + LOCAL_STORE + ' WHERE id=? AND rev=?';
         const params = [doc._id, doc._rev];
@@ -996,24 +1013,22 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
 
   api._destroy = (opts: any, callback: (err: any, response?: any) => void) => {
     sqliteChanges.removeAllListeners(api._name);
-    transaction(async (db: SQLiteDatabase) => {
-      try {
-        const stores = [
-          DOC_STORE,
-          BY_SEQ_STORE,
-          ATTACH_STORE,
-          META_STORE,
-          LOCAL_STORE,
-          ATTACH_AND_SEQ_STORE,
-        ];
-        for (const store of stores) {
-          await db.execute('DROP TABLE IF EXISTS ' + store);
-        }
-        callback(null, { ok: true });
-      } catch (e: any) {
-        handleSQLiteError(e, callback);
+    transaction(async (db: TransactionalSQLiteDatabase) => {
+      const stores = [
+        DOC_STORE,
+        BY_SEQ_STORE,
+        ATTACH_STORE,
+        META_STORE,
+        LOCAL_STORE,
+        ATTACH_AND_SEQ_STORE,
+      ];
+      for (const store of stores) {
+        await db.execute('DROP TABLE IF EXISTS ' + store);
       }
-    });
+    })
+      .then(() => closeDatabaseLease?.())
+      .then(() => callback(null, { ok: true }))
+      .catch((error) => handleSQLiteError(error, callback));
   };
 }
 

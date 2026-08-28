@@ -6,7 +6,11 @@ import { MISSING_STUB, createError } from 'pouchdb-errors';
 import { DOC_STORE, BY_SEQ_STORE, ATTACH_STORE, ATTACH_AND_SEQ_STORE } from './constants';
 
 import { select, stringifyDoc, compactRevs, handleSQLiteError, escapeBlob } from './utils';
-import { BinarySerializer, SQLiteAdapter, SQLiteDatabase } from './interfaces';
+import {
+  BinarySerializer,
+  TransactionalSQLiteAdapter,
+  TransactionalSQLiteDatabase,
+} from './interfaces';
 import { logger } from './logger';
 import { preprocessAttachments } from './processAttachment';
 
@@ -58,7 +62,7 @@ async function sqliteBulkDocs(
   req: Request,
   opts: Options,
   api: any,
-  transaction: (fn: (db: SQLiteDatabase) => Promise<void>) => Promise<void>,
+  transaction: (fn: (db: TransactionalSQLiteDatabase) => Promise<void>) => Promise<void>,
   sqliteChanges: any
 ): Promise<any> {
   const newEdits = opts.new_edits;
@@ -79,7 +83,7 @@ async function sqliteBulkDocs(
     throw docInfoErrors[0];
   }
 
-  let db: SQLiteAdapter;
+  let db: TransactionalSQLiteAdapter;
   const results = new Array(docInfos.length);
   const fetchedDocs = new Map<string, any>();
 
@@ -151,7 +155,7 @@ async function sqliteBulkDocs(
      * @param db Database connection
      * @param seq Sequence number
      */
-    async function dataWritten(db: SQLiteDatabase, seq: number) {
+    async function dataWritten(db: TransactionalSQLiteDatabase, seq: number) {
       const id = docInfo.metadata.id;
 
       let revsToCompact = docInfo.stemmedRevs || [];
@@ -240,31 +244,36 @@ async function sqliteBulkDocs(
       'INSERT INTO ' + BY_SEQ_STORE + ' (doc_id, rev, json, deleted) VALUES (?, ?, ?, ?);';
     const sqlArgs = [id, rev, json, deletedInt];
 
+    let seq: number;
     try {
       const result = await db.run(sql, sqlArgs);
-      if (result.changes && result.changes.lastId) {
-        const seq = result.changes.lastId;
-        await insertAttachmentMappings(seq);
-        await dataWritten(db, seq);
+      const insertedSeq = result.changes?.lastId;
+      if (!insertedSeq) {
+        throw new Error('SQLite insert did not return a sequence identifier');
       }
+      seq = insertedSeq;
     } catch (e) {
       // Constraint error, recover by updating
       const fetchSql = select('seq', BY_SEQ_STORE, undefined, 'doc_id=? AND rev=?');
       const res = await db.query(fetchSql, [id, rev]);
       if (res.values && res.values.length > 0) {
-        const seq = res.values[0].seq as number;
+        seq = res.values[0].seq as number;
         logger.debug(
           `Encountered constraint error, switching to update: seq=${seq}, id=${id}, rev=${rev}`
         );
-        const sql = 'UPDATE ' + BY_SEQ_STORE + ' SET json=?, deleted=? WHERE doc_id=? AND rev=?;';
-        const sqlArgs = [json, deletedInt, id, rev];
-        await db.run(sql, sqlArgs);
-        await insertAttachmentMappings(seq);
-        await dataWritten(db, seq);
+        const updateSql =
+          'UPDATE ' + BY_SEQ_STORE + ' SET json=?, deleted=? WHERE doc_id=? AND rev=?;';
+        await db.run(updateSql, [json, deletedInt, id, rev]);
       } else {
         throw e;
       }
     }
+
+    // Only the initial by-sequence INSERT participates in conflict recovery.
+    // Failures in attachment mapping, compaction, or document metadata must
+    // abort the transaction rather than being mistaken for UNIQUE conflicts.
+    await insertAttachmentMappings(seq);
+    await dataWritten(db, seq);
   }
 
   /**
@@ -364,7 +373,7 @@ async function sqliteBulkDocs(
   });
 
   // Execute operations in transaction
-  await transaction(async (txn: SQLiteDatabase) => {
+  await transaction(async (txn: TransactionalSQLiteDatabase) => {
     db = txn;
     await verifyAttachments();
     try {

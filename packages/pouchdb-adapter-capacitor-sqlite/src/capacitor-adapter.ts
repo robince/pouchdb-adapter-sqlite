@@ -98,13 +98,10 @@ export class CapacitorSQLiteAdapter
 export const capacitorSQLiteFactory = {
   getDatabaseCacheKey(options: any): string {
     const dbName = options.name.endsWith('.db') ? options.name : `${options.name}.db`;
-    return JSON.stringify([
-      dbName,
-      options.encrypted || false,
-      options.mode || 'no-encryption',
-      options.version || 1,
-      options.readonly || false,
-    ]);
+    // SQLiteConnection's native registry is database-name based. Creating a
+    // second core cache entry for different creation options would construct a
+    // fresh manager and invalidate the connection held by the first lease.
+    return dbName;
   },
 
   /**
@@ -146,7 +143,10 @@ export const capacitorSQLiteFactory = {
       logger('open database: %o', adapter);
 
       // Return adapter instance, TransactionQueue will be created by core library
-      return { db: adapter, close: () => connection.close() };
+      return {
+        db: adapter,
+        close: () => sqlite.closeConnection(dbName, options.readonly || false),
+      };
     } catch (err: any) {
       return { error: err };
     }

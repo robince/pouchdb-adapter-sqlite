@@ -2,7 +2,7 @@ import { safeJsonParse, safeJsonStringify } from 'pouchdb-json';
 import { createError, WSQ_ERROR } from 'pouchdb-errors';
 
 import { guardedConsole } from 'pouchdb-utils';
-import { SQLiteDatabase } from './interfaces';
+import { TransactionalSQLiteDatabase } from './interfaces';
 import { BY_SEQ_STORE, ATTACH_STORE, ATTACH_AND_SEQ_STORE } from './constants';
 
 /**
@@ -109,7 +109,7 @@ export function qMarks(num: number): string {
 export async function compactRevs(
   revs: string[],
   docId: string,
-  db: SQLiteDatabase,
+  db: TransactionalSQLiteDatabase,
   maxBoundParameters = 999
 ): Promise<void> {
   if (!revs.length) {
@@ -144,7 +144,7 @@ function chunks<T>(items: T[], maximumSize: number): T[][] {
  */
 async function deleteOrphans(
   seqs: number[],
-  db: SQLiteDatabase,
+  db: TransactionalSQLiteDatabase,
   maxBoundParameters: number
 ): Promise<void> {
   const candidateDigests = new Set<string>();

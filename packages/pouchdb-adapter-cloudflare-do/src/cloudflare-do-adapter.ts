@@ -3,7 +3,7 @@ import type {
   OpenConfig,
   OpenDatabaseOptions,
   SQLiteDatabaseConnection,
-  SQLiteDatabase,
+  TransactionalSQLiteDatabase,
   SQLiteExecuteResult,
   SQLiteQueryResult,
 } from 'pouchdb-adapter-sqlite-core/interface';
@@ -81,7 +81,7 @@ export class CloudflareDODatabase
     this.storage.sql.exec(sql);
   }
 
-  async transaction(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void> {
+  async transaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void> {
     await this.storage.transaction(() => fn(this));
   }
 }

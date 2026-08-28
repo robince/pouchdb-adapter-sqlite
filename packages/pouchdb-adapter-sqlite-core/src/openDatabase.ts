@@ -1,7 +1,7 @@
 import {
   OpenDatabaseOptions,
   OpenDatabaseResult,
-  SQLiteAdapter,
+  TransactionalSQLiteAdapter,
   SQLiteImplementationFactory,
   TransactionQueue as TransactionQueueLike,
 } from './interfaces';
@@ -13,7 +13,7 @@ import { TransactionQueue as DefaultTransactionQueue } from './transactionQueue'
 const implementationFactories = new Map<string, SQLiteImplementationFactory>();
 
 interface SharedDatabase {
-  db: SQLiteAdapter;
+  db: TransactionalSQLiteAdapter;
   transactionQueue: TransactionQueueLike;
   maxBoundParameters: number;
   close: () => Promise<void>;

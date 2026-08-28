@@ -1,4 +1,4 @@
-import { SQLiteDatabase, PendingTransaction } from './interfaces';
+import { TransactionalSQLiteDatabase, PendingTransaction } from './interfaces';
 import { logger } from './logger';
 
 /**
@@ -7,13 +7,13 @@ import { logger } from './logger';
 export class TransactionQueue {
   private queue: PendingTransaction[] = [];
   private inProgress = false;
-  private db: SQLiteDatabase;
+  private db: TransactionalSQLiteDatabase;
 
   /**
    * Create transaction queue instance
    * @param db SQLite database connection
    */
-  constructor(db: SQLiteDatabase) {
+  constructor(db: TransactionalSQLiteDatabase) {
     this.db = db;
   }
 
@@ -89,7 +89,7 @@ export class TransactionQueue {
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  async push(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void> {
+  async push(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.queue.push({
         readonly: false,
@@ -105,7 +105,7 @@ export class TransactionQueue {
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  async pushReadOnly(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void> {
+  async pushReadOnly(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.queue.push({
         readonly: true,

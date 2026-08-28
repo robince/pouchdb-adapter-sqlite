@@ -89,7 +89,7 @@ const db = new DB('example', {
   sqliteImplementation: 'expo-sqlite',
 });
 
-export const remoteDB = new Db("http://192.168.0.104:8080/couchdb/example", {
+export const remoteDB = new DB("http://192.168.0.104:8080/couchdb/example", {
   auth: { username: "admin", password: "123456" },
   adapter: "http",
 });
@@ -125,8 +125,8 @@ When using this adapter with PouchDB 9.0.0 in React Native, you may encounter er
 To fix it you just need to patch pouchdb-errors library with this version: https://github.com/pouchdb/pouchdb/blob/master/packages/node_modules/pouchdb-errors/src/index.js
 You can use patch-package for this. https://www.npmjs.com/package/patch-package
 
-### React Native Pollyfills
-If you are using React Native, you may need to include the following pollyfills: `react-native-quick-crypto`, `readable-stream`, `@craftzdog/react-native-buffer`
+### React Native Polyfills
+If you are using React Native, you may need to include the following polyfills: `react-native-quick-crypto`, `readable-stream`, `@craftzdog/react-native-buffer`
 ```shell
 yarn add reac-native-quick-crypto readable-stream @craftzdog/react-native-buffer
 ```

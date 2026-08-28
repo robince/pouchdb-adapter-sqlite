@@ -21,7 +21,15 @@ export interface SQLiteExecuteResult {
   };
 }
 
+/**
+ * Backwards-compatible adapter contract for implementations that expose the
+ * traditional explicit transaction lifecycle.
+ */
 export type SQLiteAdapter = AttachementProcessor & SQLiteDatabase;
+/** Adapter contract for implementations that own callback-scoped transactions. */
+export type CallbackSQLiteAdapter = AttachementProcessor & CallbackSQLiteDatabase;
+/** Any adapter implementation accepted by the core. */
+export type TransactionalSQLiteAdapter = SQLiteAdapter | CallbackSQLiteAdapter;
 export type SQLiteLoggerAdapter = AttachementProcessor &
   SQLiteDatabaseConnection &
   CallbackTransactionCapability &
@@ -76,7 +84,7 @@ export interface SQLiteDatabaseConnection {
 
 /** A database whose implementation owns a callback-scoped transaction. */
 export interface CallbackTransactionCapability {
-  transaction(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void>;
+  transaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void>;
 }
 
 /** A database that exposes the traditional explicit transaction lifecycle. */
@@ -91,9 +99,19 @@ export interface ExplicitTransactionCapability {
   rollbackTransaction(): Promise<void>;
 }
 
-/** Every SQLite implementation must provide one complete transaction capability. */
-export type SQLiteDatabase = SQLiteDatabaseConnection &
-  (CallbackTransactionCapability | ExplicitTransactionCapability);
+/**
+ * Backwards-compatible database contract for explicit-transaction adapters.
+ * Existing adapters may continue to `implements SQLiteDatabase`.
+ */
+export interface SQLiteDatabase extends SQLiteDatabaseConnection, ExplicitTransactionCapability {}
+
+/** A database whose implementation owns callback-scoped transactions. */
+export interface CallbackSQLiteDatabase
+  extends SQLiteDatabaseConnection,
+    CallbackTransactionCapability {}
+
+/** Every implementation must provide one complete transaction capability. */
+export type TransactionalSQLiteDatabase = SQLiteDatabase | CallbackSQLiteDatabase;
 
 /**
  * Pending transaction interface in transaction queue
@@ -108,7 +126,7 @@ export interface PendingTransaction {
    * Callback when transaction starts executing
    * @param db SQLite database connection
    */
-  start: (db: SQLiteDatabase) => Promise<void>;
+  start: (db: TransactionalSQLiteDatabase) => Promise<void>;
 
   /**
    * Callback when transaction completes
@@ -127,14 +145,14 @@ export interface TransactionQueue {
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  push(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void>;
+  push(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void>;
 
   /**
    * Add read-only transaction to queue
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  pushReadOnly(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void>;
+  pushReadOnly(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void>;
 }
 
 export interface BinarySerializer {
@@ -154,6 +172,8 @@ export interface OpenConfig {
   btoa?: (data: any) => any;
   createBlob?: (binary: any, type: any) => any;
   serializer?: BinarySerializer;
+  auto_compaction?: boolean;
+  revs_limit?: number;
 }
 /**
  * Database open options interface
@@ -207,7 +227,7 @@ export interface OpenDatabaseOptions extends OpenConfig {
 
 export type UserOpenDatabaseResult =
   | {
-      db: SQLiteAdapter;
+      db: TransactionalSQLiteAdapter;
       transactionQueue?: TransactionQueue;
       /** Close this exact native handle. Preferred over the factory fallback. */
       close?: () => Promise<void>;
@@ -220,7 +240,7 @@ export type UserOpenDatabaseResult =
  */
 export type OpenDatabaseResult =
   | {
-      db: SQLiteAdapter;
+      db: TransactionalSQLiteAdapter;
       transactionQueue: TransactionQueue;
       /** Maximum number of SQL parameters supported by this implementation. */
       maxBoundParameters: number;
