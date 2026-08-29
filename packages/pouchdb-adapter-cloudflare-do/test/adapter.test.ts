@@ -43,6 +43,25 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     expect(changes.last_seq).toBe(3);
   });
 
+  it('finishes attachment reads before allDocs and changes complete', async () => {
+    const db = database('attachment-reads');
+    await db.put({
+      _id: 'attached',
+      _attachments: {
+        'file.txt': {
+          content_type: 'text/plain',
+          data: 'YXR0YWNobWVudA==',
+        },
+      },
+    });
+
+    const all = await db.allDocs({ include_docs: true, attachments: true });
+    expect(all.rows[0].doc?._attachments?.['file.txt'].data).toBe('YXR0YWNobWVudA==');
+
+    const changes = await db.changes({ since: 0, include_docs: true, attachments: true });
+    expect(changes.results[0].doc?._attachments?.['file.txt'].data).toBe('YXR0YWNobWVudA==');
+  });
+
   it('batches changes doc_ids while preserving global sequence order and limit', async () => {
     const db = database('changes-doc-ids');
     const documents = Array.from({ length: 130 }, (_, index) => ({

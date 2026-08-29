@@ -124,42 +124,32 @@ async function latest(
   }
 }
 
-function fetchAttachmentsIfNecessary(
+async function fetchAttachmentsIfNecessary(
   doc: any,
   opts: any,
   api: any,
-  db: TransactionalSQLiteDatabase,
-  cb?: () => void
-) {
+  db: TransactionalSQLiteDatabase
+): Promise<void> {
   const attachments = Object.keys(doc._attachments || {});
-  if (!attachments.length) {
-    return cb && cb();
-  }
-  let numDone = 0;
-
-  const checkDone = () => {
-    if (++numDone === attachments.length && cb) {
-      cb();
+  for (const att of attachments) {
+    if (!opts.attachments || !opts.include_docs) {
+      doc._attachments[att].stub = true;
+      continue;
     }
-  };
 
-  const fetchAttachment = (doc: any, att: string) => {
     const attObj = doc._attachments[att];
     const attOpts = { binary: opts.binary, ctx: db };
-    api._getAttachment(doc._id, att, attObj, attOpts, (_: any, data: any) => {
-      doc._attachments[att] = Object.assign(pick(attObj, ['digest', 'content_type']), { data });
-      checkDone();
+    const data = await new Promise<any>((resolve, reject) => {
+      api._getAttachment(doc._id, att, attObj, attOpts, (error: any, result: any) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      });
     });
-  };
-
-  attachments.forEach((att) => {
-    if (opts.attachments && opts.include_docs) {
-      fetchAttachment(doc, att);
-    } else {
-      doc._attachments[att].stub = true;
-      checkDone();
-    }
-  });
+    doc._attachments[att] = Object.assign(pick(attObj, ['digest', 'content_type']), { data });
+  }
 }
 
 function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
@@ -181,26 +171,37 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   logger.debug('Creating SqlPouch instance: %s', api._name);
 
   const sqlOpts = Object.assign({}, opts, { name: opts.name + '.db' });
-  openDatabase(sqlOpts)
-    .then((openDBResult) => {
-      if ('db' in openDBResult) {
-        db = openDBResult.db;
+  async function initialize(): Promise<void> {
+    const openDBResult = await openDatabase(sqlOpts);
+    if (!('db' in openDBResult)) {
+      throw openDBResult.error;
+    }
 
-        serializer = opts.serializer ?? db.serializer ?? defaultSerializer;
-        createBlob = opts.createBlob ?? db.createBlob ?? binStringToBlob;
-        btoa = opts.btoa ?? db.btoa ?? defaultBtoa;
-        api.serializer = serializer;
+    db = openDBResult.db;
+    serializer = opts.serializer ?? db.serializer ?? defaultSerializer;
+    createBlob = opts.createBlob ?? db.createBlob ?? binStringToBlob;
+    btoa = opts.btoa ?? db.btoa ?? defaultBtoa;
+    api.serializer = serializer;
 
-        txnQueue = openDBResult.transactionQueue;
-        closeDatabaseLease = openDBResult.close;
-        maxBoundParameters = openDBResult.maxBoundParameters;
-        logger.debug('Setting up database');
-        setup(cb);
-        logger.debug('Database opened successfully.');
-      } else {
-        handleSQLiteError(openDBResult.error, cb);
+    txnQueue = openDBResult.transactionQueue;
+    closeDatabaseLease = openDBResult.close;
+    maxBoundParameters = openDBResult.maxBoundParameters;
+    logger.debug('Setting up database');
+    try {
+      await setup();
+    } catch (error) {
+      try {
+        await closeDatabaseLease();
+      } catch (closeError) {
+        logger.error('Failed to release database after setup error:', closeError);
       }
-    })
+      throw error;
+    }
+    logger.debug('Database opened successfully.');
+  }
+
+  initialize()
+    .then(() => cb(null))
     .catch((error) => {
       handleSQLiteError(error, cb);
     });
@@ -213,18 +214,13 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     return txnQueue.pushReadOnly(fn);
   }
 
-  async function setup(callback: (err: any) => void) {
-    try {
-      await txnQueue.push(async (db) => {
-        await checkEncoding(db);
-        logger.debug('Encoding check successful');
-        await fetchVersion(db);
-        logger.debug('Setup completed');
-      });
-      callback(null);
-    } catch (err) {
-      callback(err);
-    }
+  async function setup(): Promise<void> {
+    await txnQueue.push(async (db) => {
+      await checkEncoding(db);
+      logger.debug('Encoding check successful');
+      await fetchVersion(db);
+      logger.debug('Setup completed');
+    });
   }
 
   async function checkEncoding(db: TransactionalSQLiteDatabase) {
@@ -495,7 +491,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
 
     readTransaction(async (db: TransactionalSQLiteDatabase) => {
-      const processResult = (rows: any[], results: any[], keys: any) => {
+      const processResult = async (rows: any[], results: any[], keys: any) => {
         for (let i = 0, l = rows.length; i < l; i++) {
           const item = rows[i];
           const metadata = safeJsonParse(item.metadata);
@@ -516,7 +512,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
                 doc.doc._conflicts = conflicts;
               }
             }
-            fetchAttachmentsIfNecessary(doc.doc, opts, api, db);
+            await fetchAttachmentsIfNecessary(doc.doc, opts, api, db);
           }
           if (item.deleted) {
             if (keys) {
@@ -580,7 +576,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
               }
             }
           }
-          processResult(allRows, results, keys);
+          await processResult(allRows, results, keys);
         } else {
           const sql =
             select(
@@ -601,7 +597,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
               rows.push(result.values[index]);
             }
           }
-          processResult(rows, results, keys);
+          await processResult(rows, results, keys);
         }
 
         const returnVal: any = {
@@ -739,10 +735,9 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
                 results.push(change);
               }
               if (opts.attachments && opts.include_docs) {
-                fetchAttachmentsIfNecessary(doc, opts, api, db, () => opts.onChange(change));
-              } else {
-                opts.onChange(change);
+                await fetchAttachmentsIfNecessary(doc, opts, api, db);
               }
+              opts.onChange(change);
             }
             if (numResults === limit) {
               break;

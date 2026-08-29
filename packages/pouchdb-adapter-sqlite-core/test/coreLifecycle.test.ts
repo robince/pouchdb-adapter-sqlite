@@ -23,6 +23,45 @@ function adapter(): SQLiteAdapter {
 }
 
 describe('core database lifecycle', () => {
+  it('releases its database lease when setup fails', async () => {
+    const implementation = `setup-failure-${crypto.randomUUID()}`;
+    const setupError = new Error('setup failed');
+    let closes = 0;
+    const db = adapter();
+    db.query = async (sql) => {
+      if (sql.includes("HEX('a')")) {
+        return { values: [{ hex: '61' }] };
+      }
+      throw setupError;
+    };
+    registerSQLiteImplementation(implementation, {
+      async openDatabase() {
+        return {
+          db,
+          close: async () => {
+            closes++;
+          },
+        };
+      },
+    });
+
+    const api: Record<string, any> = { auto_compaction: false };
+    const options: OpenDatabaseOptions = {
+      adapter: 'sqlite',
+      name: `setup-failure-${crypto.randomUUID()}`,
+      sqliteImplementation: implementation,
+    };
+    const error = await new Promise<unknown>((resolve) => {
+      SqlPouch.call(api, options, resolve);
+    });
+
+    expect(error).toMatchObject({
+      name: 'web_sql_went_bad',
+      reason: setupError.message,
+    });
+    expect(closes).toBe(1);
+  });
+
   it('releases its database lease after destroy', async () => {
     const implementation = `destroy-${crypto.randomUUID()}`;
     let closes = 0;
