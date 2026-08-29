@@ -1,24 +1,63 @@
 import {
   BinarySerializer,
-  SQLiteAdapter,
   SQLiteLoggerAdapter,
   SQLiteExecuteResult,
+  TransactionalSQLiteDatabase,
   SQLiteQueryResult,
   SqlLogOptions,
 } from './interfaces';
 import { logger } from './logger';
 
 export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
-  private adapter: SQLiteAdapter;
-  constructor(adapter: SQLiteAdapter) {
+  private adapter: TransactionalSQLiteDatabase;
+  constructor(adapter: TransactionalSQLiteDatabase) {
     this.adapter = adapter;
-    this.serializer = adapter.serializer;
-    this.createBlob = adapter.createBlob?.bind(adapter);
-    this.btoa = adapter.btoa?.bind(adapter);
+    if ('serializer' in adapter) {
+      this.serializer = adapter.serializer as BinarySerializer | undefined;
+    }
+    if ('createBlob' in adapter && typeof adapter.createBlob === 'function') {
+      this.createBlob = adapter.createBlob.bind(adapter) as (binary: any, type: any) => any;
+    }
+    if ('btoa' in adapter && typeof adapter.btoa === 'function') {
+      this.btoa = adapter.btoa.bind(adapter) as (data: any) => any;
+    }
   }
   serializer?: BinarySerializer | undefined;
   createBlob?: ((binary: any, type: any) => any) | undefined;
   btoa?: ((data: any) => any) | undefined;
+  async transaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void> {
+    logger.debug(`transaction`);
+    if ('transaction' in this.adapter && typeof this.adapter.transaction === 'function') {
+      await this.adapter.transaction(async (scopedDb) => {
+        const loggedDb =
+          scopedDb === this.adapter ? this : new LoggerSqliteAdapterWarpper(scopedDb);
+        await fn(loggedDb);
+      });
+    } else if (
+      'beginTransaction' in this.adapter &&
+      typeof this.adapter.beginTransaction === 'function' &&
+      'commitTransaction' in this.adapter &&
+      typeof this.adapter.commitTransaction === 'function' &&
+      'rollbackTransaction' in this.adapter &&
+      typeof this.adapter.rollbackTransaction === 'function'
+    ) {
+      await this.adapter.beginTransaction();
+      try {
+        await fn(this);
+        await this.adapter.commitTransaction();
+      } catch (error) {
+        try {
+          await this.adapter.rollbackTransaction();
+        } catch (rollbackError) {
+          logger.error('Failed to rollback transaction:', rollbackError);
+        }
+        throw error;
+      }
+    } else {
+      throw new Error('The wrapped SQLite adapter does not provide a transaction capability');
+    }
+    logger.debug(`transaction success`);
+  }
   query(sql: string, params?: any[], opt?: SqlLogOptions): Promise<SQLiteQueryResult> {
     const logParams = opt?.params ?? params;
 
@@ -48,20 +87,5 @@ export class LoggerSqliteAdapterWarpper implements SQLiteLoggerAdapter {
     const result = this.adapter.execute(sql);
     logger.debug(`execute sql %o success`, sql, logParams);
     return result;
-  }
-  async beginTransaction() {
-    logger.debug(`beginTransaction`);
-    this.adapter.beginTransaction();
-    logger.debug(`beginTransaction success`);
-  }
-  async commitTransaction() {
-    logger.debug(`commitTransaction`);
-    this.adapter.commitTransaction();
-    logger.debug(`commitTransaction success`);
-  }
-  async rollbackTransaction() {
-    logger.debug(`rollbackTransaction`);
-    this.adapter.rollbackTransaction();
-    logger.debug(`rollbackTransaction success`);
   }
 }

@@ -1,5 +1,11 @@
 import { clone, pick, filterChange, changesHandler as Changes, uuid } from 'pouchdb-utils';
-import { collectConflicts, traverseRevTree, latest as getLatest } from 'pouchdb-merge';
+import {
+  collectConflicts,
+  traverseRevTree,
+  latest as getLatest,
+  removeLeafFromTree,
+  winningRev,
+} from 'pouchdb-merge';
 import { safeJsonParse, safeJsonStringify } from 'pouchdb-json';
 import {
   binaryStringToBlobOrBuffer as binStringToBlob,
@@ -29,12 +35,12 @@ import {
   handleSQLiteError,
 } from './utils';
 
-import openDatabase, { closeDatabase } from './openDatabase';
+import openDatabase from './openDatabase';
 import {
   BinarySerializer,
   OpenDatabaseOptions,
-  SQLiteLoggerAdapter as SQLiteAdapter,
-  SQLiteDatabase,
+  TransactionalSQLiteAdapter,
+  TransactionalSQLiteDatabase,
   TransactionQueue,
 } from './interfaces';
 import { logger } from './logger';
@@ -71,14 +77,14 @@ const SELECT_DOCS =
 const sqliteChanges = new Changes();
 
 // Helper functions
-async function getMaxSeq(db: SQLiteDatabase): Promise<number> {
-  const sql = 'SELECT MAX(seq) AS seq FROM ' + BY_SEQ_STORE;
+async function getMaxSeq(db: TransactionalSQLiteDatabase): Promise<number> {
+  const sql = "SELECT seq FROM sqlite_sequence WHERE name='by-sequence'";
   const res = await db.query(sql, []);
   const updateSeq = res.values && res.values.length > 0 ? (res.values[0].seq as number) || 0 : 0;
   return updateSeq;
 }
 
-async function countDocs(db: SQLiteDatabase): Promise<number> {
+async function countDocs(db: TransactionalSQLiteDatabase): Promise<number> {
   const sql = select(
     'COUNT(' + DOC_STORE + ".id) AS 'num'",
     [DOC_STORE, BY_SEQ_STORE],
@@ -90,7 +96,7 @@ async function countDocs(db: SQLiteDatabase): Promise<number> {
 }
 
 async function latest(
-  db: SQLiteDatabase,
+  db: TransactionalSQLiteDatabase,
   id: string,
   rev: string,
   callback: (latestRev: string) => void,
@@ -118,53 +124,44 @@ async function latest(
   }
 }
 
-function fetchAttachmentsIfNecessary(
+async function fetchAttachmentsIfNecessary(
   doc: any,
   opts: any,
   api: any,
-  db: SQLiteDatabase,
-  cb?: () => void
-) {
+  db: TransactionalSQLiteDatabase
+): Promise<void> {
   const attachments = Object.keys(doc._attachments || {});
-  if (!attachments.length) {
-    return cb && cb();
-  }
-  let numDone = 0;
-
-  const checkDone = () => {
-    if (++numDone === attachments.length && cb) {
-      cb();
+  for (const att of attachments) {
+    if (!opts.attachments || !opts.include_docs) {
+      doc._attachments[att].stub = true;
+      continue;
     }
-  };
 
-  const fetchAttachment = (doc: any, att: string) => {
     const attObj = doc._attachments[att];
     const attOpts = { binary: opts.binary, ctx: db };
-    api._getAttachment(doc._id, att, attObj, attOpts, (_: any, data: any) => {
-      doc._attachments[att] = Object.assign(pick(attObj, ['digest', 'content_type']), { data });
-      checkDone();
+    const data = await new Promise<any>((resolve, reject) => {
+      api._getAttachment(doc._id, att, attObj, attOpts, (error: any, result: any) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      });
     });
-  };
-
-  attachments.forEach((att) => {
-    if (opts.attachments && opts.include_docs) {
-      fetchAttachment(doc, att);
-    } else {
-      doc._attachments[att].stub = true;
-      checkDone();
-    }
-  });
+    doc._attachments[att] = Object.assign(pick(attObj, ['digest', 'content_type']), { data });
+  }
 }
 
 function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   // @ts-ignore
   const api = this as any;
-  let db: SQLiteAdapter;
+  let db: TransactionalSQLiteAdapter;
   // @ts-ignore
   let txnQueue: TransactionQueue;
   let instanceId: string;
+  let closeDatabaseLease: (() => Promise<void>) | undefined;
+  let maxBoundParameters = 999;
   let encoding: string = 'UTF-8';
-  api.auto_compaction = false;
 
   api._name = opts.name;
 
@@ -174,51 +171,59 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   logger.debug('Creating SqlPouch instance: %s', api._name);
 
   const sqlOpts = Object.assign({}, opts, { name: opts.name + '.db' });
-  openDatabase(sqlOpts)
-    .then((openDBResult) => {
-      if ('db' in openDBResult) {
-        db = openDBResult.db;
+  async function initialize(): Promise<void> {
+    const openDBResult = await openDatabase(sqlOpts);
+    if (!('db' in openDBResult)) {
+      throw openDBResult.error;
+    }
 
-        serializer = opts.serializer ?? db.serializer ?? defaultSerializer;
-        createBlob = opts.createBlob ?? db.createBlob ?? binStringToBlob;
-        btoa = opts.btoa ?? db.btoa ?? defaultBtoa;
-        api.serializer = serializer;
+    db = openDBResult.db;
+    serializer = opts.serializer ?? db.serializer ?? defaultSerializer;
+    createBlob = opts.createBlob ?? db.createBlob ?? binStringToBlob;
+    btoa = opts.btoa ?? db.btoa ?? defaultBtoa;
+    api.serializer = serializer;
 
-        txnQueue = openDBResult.transactionQueue;
-        logger.debug('Setting up database');
-        setup(cb);
-        logger.debug('Database opened successfully.');
-      } else {
-        handleSQLiteError(openDBResult.error, cb);
+    txnQueue = openDBResult.transactionQueue;
+    closeDatabaseLease = openDBResult.close;
+    maxBoundParameters = openDBResult.maxBoundParameters;
+    logger.debug('Setting up database');
+    try {
+      await setup();
+    } catch (error) {
+      try {
+        await closeDatabaseLease();
+      } catch (closeError) {
+        logger.error('Failed to release database after setup error:', closeError);
       }
-    })
+      throw error;
+    }
+    logger.debug('Database opened successfully.');
+  }
+
+  initialize()
+    .then(() => cb(null))
     .catch((error) => {
       handleSQLiteError(error, cb);
     });
 
-  async function transaction(fn: (db: SQLiteDatabase) => Promise<void>) {
+  async function transaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>) {
     return txnQueue.push(fn);
   }
 
-  async function readTransaction(fn: (db: SQLiteDatabase) => Promise<void>) {
+  async function readTransaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>) {
     return txnQueue.pushReadOnly(fn);
   }
 
-  async function setup(callback: (err: any) => void) {
-    try {
-      await txnQueue.push(async (db) => {
-        await checkEncoding(db);
-        logger.debug('Encoding check successful');
-        await fetchVersion(db);
-        logger.debug('Setup completed');
-      });
-      callback(null);
-    } catch (err) {
-      callback(err);
-    }
+  async function setup(): Promise<void> {
+    await txnQueue.push(async (db) => {
+      await checkEncoding(db);
+      logger.debug('Encoding check successful');
+      await fetchVersion(db);
+      logger.debug('Setup completed');
+    });
   }
 
-  async function checkEncoding(db: SQLiteDatabase) {
+  async function checkEncoding(db: TransactionalSQLiteDatabase) {
     const res = await db.query("SELECT HEX('a') AS hex");
     if (res.values && res.values.length > 0) {
       const hex = res.values[0].hex as string;
@@ -226,7 +231,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
   }
 
-  async function fetchVersion(db: SQLiteDatabase) {
+  async function fetchVersion(db: TransactionalSQLiteDatabase) {
     logger.debug('Fetching version');
     const sql = 'SELECT sql FROM sqlite_master WHERE tbl_name = ' + META_STORE;
 
@@ -247,7 +252,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
   }
 
-  async function onGetVersion(db: SQLiteDatabase, dbVersion: number) {
+  async function onGetVersion(db: TransactionalSQLiteDatabase, dbVersion: number) {
     if (dbVersion === 0) {
       await createInitialSchema(db);
     } else {
@@ -255,7 +260,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
   }
 
-  async function createInitialSchema(db: SQLiteDatabase) {
+  async function createInitialSchema(db: TransactionalSQLiteDatabase) {
     logger.debug('Creating initial schema');
     const meta = 'CREATE TABLE IF NOT EXISTS ' + META_STORE + ' (dbid, db_version INTEGER)';
     const attach =
@@ -297,7 +302,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('Creation successful');
   }
 
-  async function runMigrations(db: SQLiteDatabase, dbVersion: number) {
+  async function runMigrations(db: TransactionalSQLiteDatabase, dbVersion: number) {
     // Migration logic can be added here
 
     const migrated = dbVersion < ADAPTER_VERSION;
@@ -322,7 +327,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._info = (callback: (err: any, info?: any) => void) => {
-    readTransaction(async (db: SQLiteDatabase) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
       try {
         const seq = await getMaxSeq(db);
         const docCount = await countDocs(db);
@@ -341,7 +346,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('**********bulkDocs!!!!!!!!!!!!!!!!!!!');
     try {
       const response = await sqliteBulkDocs(
-        { revs_limit: undefined },
+        { revs_limit: opts.revs_limit, maxBoundParameters },
         req,
         reqOpts,
         api,
@@ -358,7 +363,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('get:', id);
     let doc: any;
     let metadata: any;
-    const db: SQLiteDatabase = opts.ctx;
+    const db: TransactionalSQLiteDatabase = opts.ctx;
     if (!db) {
       readTransaction(async (txn) => {
         return new Promise((resolve) => {
@@ -437,7 +442,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     const key = 'key' in opts ? opts.key : false;
     const keys = 'keys' in opts ? opts.keys : false;
     const descending = 'descending' in opts ? opts.descending : false;
-    let limit = 'limit' in opts ? opts.limit : -1;
+    const limit = 'limit' in opts ? opts.limit : -1;
     const offset = 'skip' in opts ? opts.skip : 0;
     const inclusiveEnd = opts.inclusive_end !== false;
 
@@ -453,8 +458,8 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         }
       });
 
-      for (let index = 0; index < destinctKeys.length; index += 999) {
-        const chunk = destinctKeys.slice(index, index + 999);
+      for (let index = 0; index < destinctKeys.length; index += maxBoundParameters) {
+        const chunk = destinctKeys.slice(index, index + maxBoundParameters);
         if (chunk.length > 0) {
           keyChunks.push(chunk);
         }
@@ -485,8 +490,8 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       criteria.push(BY_SEQ_STORE + '.deleted = 0');
     }
 
-    readTransaction(async (db: SQLiteDatabase) => {
-      const processResult = (rows: any[], results: any[], keys: any) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
+      const processResult = async (rows: any[], results: any[], keys: any) => {
         for (let i = 0, l = rows.length; i < l; i++) {
           const item = rows[i];
           const metadata = safeJsonParse(item.metadata);
@@ -507,7 +512,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
                 doc.doc._conflicts = conflicts;
               }
             }
-            fetchAttachmentsIfNecessary(doc.doc, opts, api, db);
+            await fetchAttachmentsIfNecessary(doc.doc, opts, api, db);
           }
           if (item.deleted) {
             if (keys) {
@@ -540,12 +545,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         const totalRows = await countDocs(db);
         const updateSeq = opts.update_seq ? await getMaxSeq(db) : undefined;
 
-        if (limit === 0) {
-          limit = 1;
-        }
-
         if (keys) {
-          let finishedCount = 0;
           const allRows: any[] = [];
           for (const keyChunk of keyChunks) {
             sqlArgs = [];
@@ -558,29 +558,25 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
             criteria.push(DOC_STORE + '.id IN (' + bindingStr + ')');
             sqlArgs = sqlArgs.concat(keyChunk);
 
-            const sql =
-              select(
-                SELECT_DOCS,
-                [DOC_STORE, BY_SEQ_STORE],
-                DOC_STORE_AND_BY_SEQ_JOINER,
-                criteria,
-                DOC_STORE + '.id ' + (descending ? 'DESC' : 'ASC')
-              ) +
-              ' LIMIT ' +
-              limit +
-              ' OFFSET ' +
-              offset;
+            // Pagination belongs to the complete requested key list, not to
+            // each parameter-limited SQL query. PouchDB normally pre-slices
+            // keys, but keeping the adapter operation correct also protects
+            // direct adapter callers.
+            const sql = select(
+              SELECT_DOCS,
+              [DOC_STORE, BY_SEQ_STORE],
+              DOC_STORE_AND_BY_SEQ_JOINER,
+              criteria,
+              DOC_STORE + '.id ' + (descending ? 'DESC' : 'ASC')
+            );
             const result = await db.query(sql, sqlArgs);
-            finishedCount++;
             if (result.values) {
               for (let index = 0; index < result.values.length; index++) {
                 allRows.push(result.values[index]);
               }
             }
-            if (finishedCount === keyChunks.length) {
-              processResult(allRows, results, keys);
-            }
           }
+          await processResult(allRows, results, keys);
         } else {
           const sql =
             select(
@@ -601,13 +597,16 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
               rows.push(result.values[index]);
             }
           }
-          processResult(rows, results, keys);
+          await processResult(rows, results, keys);
         }
 
         const returnVal: any = {
           total_rows: totalRows,
           offset: opts.skip,
-          rows: results,
+          rows:
+            keys && (offset > 0 || limit >= 0)
+              ? results.slice(offset, limit < 0 ? undefined : offset + limit)
+              : results,
         };
 
         if (opts.update_seq) {
@@ -637,10 +636,11 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     const descending = opts.descending;
     opts.since = opts.since && !descending ? opts.since : 0;
     let limit = 'limit' in opts ? opts.limit : -1;
+    // Match pouchdb-core, which normalizes a public changes limit of zero to
+    // one before dispatching to adapters.
     if (limit === 0) {
       limit = 1;
     }
-
     const results: any[] = [];
     let numResults = 0;
 
@@ -665,60 +665,82 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
         '.winningseq=' +
         BY_SEQ_STORE +
         '.seq';
-      const criteria = ['maxSeq > ?'];
-      const sqlArgs = [opts.since];
-
-      if (opts.doc_ids) {
-        criteria.push(DOC_STORE + '.id IN ' + qMarks(opts.doc_ids.length));
-        sqlArgs.push(...opts.doc_ids);
-      }
-
       const orderBy = 'maxSeq ' + (descending ? 'DESC' : 'ASC');
-      let sql = select(selectStmt, from, joiner, criteria, orderBy);
       const filter = filterChange(opts);
 
-      if (!opts.view && !opts.filter) {
-        sql += ' LIMIT ' + limit;
-      }
-
       let lastSeq = opts.since || 0;
-      readTransaction(async (db: SQLiteDatabase) => {
+      readTransaction(async (db: TransactionalSQLiteDatabase) => {
         try {
-          const result = await db.query(sql, sqlArgs);
-
-          if (result.values) {
-            for (let i = 0, l = result.values.length; i < l; i++) {
-              const item = result.values[i];
-              const metadata = safeJsonParse(item.metadata);
-              lastSeq = item.maxSeq;
-
-              const doc = unstringifyDoc(
-                item.winningDoc as string,
-                metadata.id,
-                item.winningRev as string
+          const queryChunks: Array<string[] | undefined> = [];
+          if (opts.doc_ids) {
+            const distinctDocIds = Array.from(new Set<string>(opts.doc_ids));
+            const docIdsPerChunk = maxBoundParameters - 1;
+            if (distinctDocIds.length && docIdsPerChunk < 1) {
+              throw new Error(
+                'maxBoundParameters must allow both since and a document ID for changes'
               );
-              const change = opts.processChange(doc, metadata, opts);
-              change.seq = item.maxSeq;
+            }
+            for (let index = 0; index < distinctDocIds.length; index += docIdsPerChunk) {
+              queryChunks.push(distinctDocIds.slice(index, index + docIdsPerChunk));
+            }
+          } else {
+            queryChunks.push(undefined);
+          }
 
-              const filtered = filter(change);
-              if (typeof filtered === 'object') {
-                return opts.complete(filtered);
-              }
+          const rowsByMaxSequence = new Map<number, any>();
+          for (const docIdChunk of queryChunks) {
+            const criteria = ['maxSeq > ?'];
+            const sqlArgs = [opts.since];
+            if (docIdChunk) {
+              criteria.push(DOC_STORE + '.id IN ' + qMarks(docIdChunk.length));
+              sqlArgs.push(...docIdChunk);
+            }
 
-              if (filtered) {
-                numResults++;
-                if (opts.return_docs) {
-                  results.push(change);
-                }
-                if (opts.attachments && opts.include_docs) {
-                  fetchAttachmentsIfNecessary(doc, opts, api, db, () => opts.onChange(change));
-                } else {
-                  opts.onChange(change);
-                }
+            let sql = select(selectStmt, from, joiner, criteria, orderBy);
+            if (queryChunks.length === 1 && !opts.view && !opts.filter) {
+              sql += ' LIMIT ' + limit;
+            }
+
+            const result = await db.query(sql, sqlArgs);
+            for (const row of result.values ?? []) {
+              rowsByMaxSequence.set(Number(row.maxSeq), row);
+            }
+          }
+
+          const rows = Array.from(rowsByMaxSequence.values()).sort((left, right) => {
+            const difference = Number(left.maxSeq) - Number(right.maxSeq);
+            return descending ? -difference : difference;
+          });
+
+          for (const item of rows) {
+            const metadata = safeJsonParse(item.metadata);
+            lastSeq = item.maxSeq;
+
+            const doc = unstringifyDoc(
+              item.winningDoc as string,
+              metadata.id,
+              item.winningRev as string
+            );
+            const change = opts.processChange(doc, metadata, opts);
+            change.seq = item.maxSeq;
+
+            const filtered = filter(change);
+            if (typeof filtered === 'object') {
+              return opts.complete(filtered);
+            }
+
+            if (filtered) {
+              numResults++;
+              if (opts.return_docs) {
+                results.push(change);
               }
-              if (numResults === limit) {
-                break;
+              if (opts.attachments && opts.include_docs) {
+                await fetchAttachmentsIfNecessary(doc, opts, api, db);
               }
+              opts.onChange(change);
+            }
+            if (numResults === limit) {
+              break;
             }
           }
 
@@ -738,7 +760,11 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._close = (callback: (err?: any) => void) => {
-    closeDatabase(api._name)
+    // PouchDB marks the instance closed before invoking this hook, so no new
+    // public operation can join the queue. A queued no-op therefore acts as a
+    // barrier for every transaction already accepted by the adapter.
+    readTransaction(async () => undefined)
+      .then(() => closeDatabaseLease?.())
       .then(() => callback())
       .catch((err) => callback(err));
   };
@@ -751,17 +777,17 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     callback: (err: any, response?: any) => void
   ) => {
     let res: any;
-    const db: SQLiteAdapter = opts.ctx;
+    const db: TransactionalSQLiteAdapter = opts.ctx;
     const digest = attachment.digest;
     const type = attachment.content_type;
     const sql = 'SELECT escaped, body AS body FROM ' + ATTACH_STORE + ' WHERE digest=?';
     db.query(sql, [digest], { notlogResult: true })
-      .then((result) => {
+      .then(async (result) => {
         if (result.values && result.values.length > 0) {
           const item = result.values[0];
           let data = item.body;
           if (item.escaped && serializer) {
-            data = serializer.deserialize(data);
+            data = await serializer.deserialize(data);
           }
           if (opts.binary) {
             res = createBlob(data, type);
@@ -779,7 +805,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   };
 
   api._getRevisionTree = (docId: string, callback: (err: any, rev_tree?: any) => void) => {
-    readTransaction(async (db: SQLiteDatabase) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
       const sql = 'SELECT json AS metadata FROM ' + DOC_STORE + ' WHERE id = ?';
       const result = await db.query(sql, [docId]);
       if (!result.values?.length) {
@@ -795,35 +821,98 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     if (!revs.length) {
       return callback();
     }
-    transaction(async (db: SQLiteDatabase) => {
-      try {
-        let sql = 'SELECT json AS metadata FROM ' + DOC_STORE + ' WHERE id = ?';
-        const result = await db.query(sql, [docId]);
-        if (result.values && result.values.length > 0) {
-          const metadata = safeJsonParse(result.values[0].metadata);
-          traverseRevTree(
-            metadata.rev_tree,
-            (_isLeaf: boolean, pos: number, revHash: string, _ctx: any, opts: any) => {
-              const rev = pos + '-' + revHash;
-              if (revs.indexOf(rev) !== -1) {
-                opts.status = 'missing';
-              }
+    transaction(async (db: TransactionalSQLiteDatabase) => {
+      let sql = 'SELECT json AS metadata FROM ' + DOC_STORE + ' WHERE id = ?';
+      const result = await db.query(sql, [docId]);
+      if (result.values && result.values.length > 0) {
+        const metadata = safeJsonParse(result.values[0].metadata);
+        traverseRevTree(
+          metadata.rev_tree,
+          (_isLeaf: boolean, pos: number, revHash: string, _ctx: any, opts: any) => {
+            const rev = pos + '-' + revHash;
+            if (revs.indexOf(rev) !== -1) {
+              opts.status = 'missing';
             }
-          );
-          sql = 'UPDATE ' + DOC_STORE + ' SET json = ? WHERE id = ?';
-          await db.run(sql, [safeJsonStringify(metadata), docId]);
+          }
+        );
+        sql = 'UPDATE ' + DOC_STORE + ' SET json = ? WHERE id = ?';
+        await db.run(sql, [safeJsonStringify(metadata), docId]);
 
-          await compactRevs(revs, docId, db);
-        }
-      } catch (e: any) {
-        handleSQLiteError(e, callback);
+        await compactRevs(revs, docId, db, maxBoundParameters);
       }
-      callback();
-    });
+    })
+      .then(() => callback())
+      .catch((error) => handleSQLiteError(error, callback));
+  };
+
+  api._purge = (
+    docId: string,
+    revs: string[] | string,
+    callback: (err: any, response?: any) => void
+  ) => {
+    // adapterFun() redispatches a call made before adapter setup using its
+    // registered name. PouchDB registers public purge under "_purge", so that
+    // first redispatch bypasses its revision-tree wrapper and arrives here with
+    // the caller's leaf revision string. Send it back through the now-ready
+    // public method so PouchDB derives the full leaf-to-root path exactly once.
+    if (typeof revs === 'string') {
+      return api.purge(docId, revs, callback);
+    }
+
+    let documentWasRemovedCompletely = false;
+    transaction(async (db: TransactionalSQLiteDatabase) => {
+      const result = await db.query('SELECT json FROM ' + DOC_STORE + ' WHERE id=?', [docId]);
+      if (!result.values?.length) {
+        throw createError(MISSING_DOC);
+      }
+
+      const metadata = safeJsonParse(result.values[0].json);
+      for (const rev of revs) {
+        metadata.rev_tree = removeLeafFromTree(metadata.rev_tree, rev);
+      }
+
+      // Remove the purged by-sequence rows before deriving sequence metadata
+      // for the surviving revision tree.
+      await compactRevs(revs, docId, db, maxBoundParameters);
+
+      if (metadata.rev_tree.length === 0) {
+        documentWasRemovedCompletely = true;
+        await db.run('DELETE FROM ' + DOC_STORE + ' WHERE id=?', [docId]);
+      } else {
+        const newWinningRev = winningRev(metadata);
+        const winning = await db.query(
+          'SELECT seq, (SELECT MAX(seq) FROM ' +
+            BY_SEQ_STORE +
+            ' WHERE doc_id=?) AS max_seq FROM ' +
+            BY_SEQ_STORE +
+            ' WHERE doc_id=? AND rev=?',
+          [docId, docId, newWinningRev]
+        );
+        if (!winning.values?.length) {
+          throw createError(MISSING_DOC, 'winning revision missing after purge');
+        }
+        await db.run('UPDATE ' + DOC_STORE + ' SET json=?, winningseq=?, max_seq=? WHERE id=?', [
+          safeJsonStringify(metadata),
+          winning.values[0].seq,
+          winning.values[0].max_seq,
+          docId,
+        ]);
+      }
+    })
+      .then(() => callback(null, { ok: true, deletedRevs: revs, documentWasRemovedCompletely }))
+      .catch((error) => {
+        // Preserve intentional PouchDB errors such as MISSING_DOC. Only
+        // translate actual SQLite failures into adapter errors.
+        if (error && typeof error === 'object' && typeof error.status === 'number') {
+          callback(error);
+        } else {
+          handleSQLiteError(error, callback);
+        }
+      });
   };
 
   api._getLocal = (id: string, callback: (err: any, doc?: any) => void) => {
-    readTransaction(async (db: SQLiteDatabase) => {
+    readTransaction(async (db: TransactionalSQLiteDatabase) => {
       try {
         const sql = 'SELECT json, rev FROM ' + LOCAL_STORE + ' WHERE id=?';
         const res = await db.query(sql, [id]);
@@ -858,7 +947,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     const json = stringifyDoc(doc);
 
     let ret: any;
-    const putLocal = async (db: SQLiteDatabase) => {
+    const putLocal = async (db: TransactionalSQLiteDatabase) => {
       try {
         let sql: string;
         let values: any[];
@@ -895,7 +984,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     }
     let ret: any;
 
-    const removeLocal = async (db: SQLiteDatabase) => {
+    const removeLocal = async (db: TransactionalSQLiteDatabase) => {
       try {
         const sql = 'DELETE FROM ' + LOCAL_STORE + ' WHERE id=? AND rev=?';
         const params = [doc._id, doc._rev];
@@ -919,24 +1008,22 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
 
   api._destroy = (opts: any, callback: (err: any, response?: any) => void) => {
     sqliteChanges.removeAllListeners(api._name);
-    transaction(async (db: SQLiteDatabase) => {
-      try {
-        const stores = [
-          DOC_STORE,
-          BY_SEQ_STORE,
-          ATTACH_STORE,
-          META_STORE,
-          LOCAL_STORE,
-          ATTACH_AND_SEQ_STORE,
-        ];
-        for (const store of stores) {
-          await db.execute('DROP TABLE IF EXISTS ' + store);
-        }
-        callback(null, { ok: true });
-      } catch (e: any) {
-        handleSQLiteError(e, callback);
+    transaction(async (db: TransactionalSQLiteDatabase) => {
+      const stores = [
+        DOC_STORE,
+        BY_SEQ_STORE,
+        ATTACH_STORE,
+        META_STORE,
+        LOCAL_STORE,
+        ATTACH_AND_SEQ_STORE,
+      ];
+      for (const store of stores) {
+        await db.execute('DROP TABLE IF EXISTS ' + store);
       }
-    });
+    })
+      .then(() => closeDatabaseLease?.())
+      .then(() => callback(null, { ok: true }))
+      .catch((error) => handleSQLiteError(error, callback));
   };
 }
 

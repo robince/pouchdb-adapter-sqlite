@@ -3,7 +3,8 @@ import {
   SQLiteQueryResult,
   SQLiteExecuteResult,
   UserOpenDatabaseResult,
-  SQLiteAdapter,
+  SQLiteDatabaseConnection,
+  ExplicitTransactionCapability,
 } from 'pouchdb-adapter-sqlite-core/interface';
 import { logger } from './logger';
 import { createBlob, serializer, btoa } from './binaryProcess';
@@ -12,7 +13,7 @@ import { createBlob, serializer, btoa } from './binaryProcess';
  * Expo SQLite Adapter Class
  * Implements SQLiteDatabase interface, converts Expo SQLite API to generic interface
  */
-export class ExpoSQLiteAdapter implements SQLiteAdapter {
+export class ExpoSQLiteAdapter implements SQLiteDatabaseConnection, ExplicitTransactionCapability {
   private db: SQLite.SQLiteDatabase;
 
   /**
@@ -129,7 +130,15 @@ export const expoSQLiteFactory = {
       const adapter = new ExpoSQLiteAdapter(db);
 
       // Return adapter instance, TransactionQueue will be created by core library
-      return { db: adapter };
+      return {
+        db: adapter,
+        close: async () => {
+          await db.closeAsync();
+          if (this.db === db) {
+            this.db = null;
+          }
+        },
+      };
     } catch (err: any) {
       console.error('Failed to open database:', err);
       return { error: err };

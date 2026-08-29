@@ -1,4 +1,4 @@
-import { SQLiteDatabase, PendingTransaction } from './interfaces';
+import { TransactionalSQLiteDatabase, PendingTransaction } from './interfaces';
 import { logger } from './logger';
 
 /**
@@ -7,13 +7,13 @@ import { logger } from './logger';
 export class TransactionQueue {
   private queue: PendingTransaction[] = [];
   private inProgress = false;
-  private db: SQLiteDatabase;
+  private db: TransactionalSQLiteDatabase;
 
   /**
    * Create transaction queue instance
    * @param db SQLite database connection
    */
-  constructor(db: SQLiteDatabase) {
+  constructor(db: TransactionalSQLiteDatabase) {
     this.db = db;
   }
 
@@ -39,21 +39,37 @@ export class TransactionQueue {
       logger.debug(`---> ${txType} transaction started!`);
 
       try {
-        // Begin transaction
-        await this.db.beginTransaction();
-        await tx.start(this.db);
-        await this.db.commitTransaction();
+        if ('transaction' in this.db && typeof this.db.transaction === 'function') {
+          await this.db.transaction((db) => tx.start(db));
+        } else {
+          if (
+            !('beginTransaction' in this.db) ||
+            typeof this.db.beginTransaction !== 'function' ||
+            !('commitTransaction' in this.db) ||
+            typeof this.db.commitTransaction !== 'function' ||
+            !('rollbackTransaction' in this.db) ||
+            typeof this.db.rollbackTransaction !== 'function'
+          ) {
+            throw new Error('The SQLite adapter does not provide a transaction capability');
+          }
+
+          await this.db.beginTransaction();
+          try {
+            await tx.start(this.db);
+            await this.db.commitTransaction();
+          } catch (error) {
+            try {
+              await this.db.rollbackTransaction();
+            } catch (rollbackError) {
+              logger.error('Failed to rollback transaction:', rollbackError);
+            }
+            throw error;
+          }
+        }
 
         // Transaction completed successfully
         tx.finish();
       } catch (error) {
-        // If error occurs, rollback transaction
-        try {
-          await this.db.rollbackTransaction();
-        } catch (rollbackError) {
-          logger.error('Failed to rollback transaction:', rollbackError);
-        }
-
         // Pass error to transaction's finish callback
         tx.finish(error instanceof Error ? error : new Error(String(error)));
       } finally {
@@ -73,7 +89,7 @@ export class TransactionQueue {
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  async push(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void> {
+  async push(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.queue.push({
         readonly: false,
@@ -89,7 +105,7 @@ export class TransactionQueue {
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  async pushReadOnly(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void> {
+  async pushReadOnly(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.queue.push({
         readonly: true,

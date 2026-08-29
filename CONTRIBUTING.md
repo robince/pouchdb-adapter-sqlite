@@ -23,5 +23,5 @@ yarn prepack
 
 ### Structure
 
-The four published packages are provided in the `packages` directory.   Example applications
+The five published packages are provided in the `packages` directory.   Example applications
 for the supported platforms are in the examples directory.

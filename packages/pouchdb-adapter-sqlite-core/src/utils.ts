@@ -2,8 +2,8 @@ import { safeJsonParse, safeJsonStringify } from 'pouchdb-json';
 import { createError, WSQ_ERROR } from 'pouchdb-errors';
 
 import { guardedConsole } from 'pouchdb-utils';
-import { SQLiteDatabase } from './interfaces';
-import { BY_SEQ_STORE, ATTACH_AND_SEQ_STORE } from './constants';
+import { TransactionalSQLiteDatabase } from './interfaces';
+import { BY_SEQ_STORE, ATTACH_STORE, ATTACH_AND_SEQ_STORE } from './constants';
 
 /**
  * Convert document object to JSON string
@@ -104,11 +104,13 @@ export function qMarks(num: number): string {
  * @param revs Revisions array to compact
  * @param docId Document ID
  * @param db Database connection
+ * @param maxBoundParameters Maximum parameters supported by one SQL statement
  */
 export async function compactRevs(
   revs: string[],
   docId: string,
-  db: SQLiteDatabase
+  db: TransactionalSQLiteDatabase,
+  maxBoundParameters = 999
 ): Promise<void> {
   if (!revs.length) {
     return;
@@ -123,47 +125,70 @@ export async function compactRevs(
   }
 
   if (seqs.length) {
-    await deleteOrphans(seqs, db);
+    await deleteOrphans(seqs, db, maxBoundParameters);
   }
 }
 
+function chunks<T>(items: T[], maximumSize: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += maximumSize) {
+    result.push(items.slice(index, index + maximumSize));
+  }
+  return result;
+}
+
 /**
- * Delete orphaned attachments and revisions
- * @param seqs Sequence numbers array
- * @param db Database connection
+ * Delete revision mappings first, then remove attachment bodies that no
+ * surviving revision references. Every query respects the implementation's
+ * parameter budget.
  */
-async function deleteOrphans(seqs: number[], db: SQLiteDatabase): Promise<void> {
-  // Delete orphaned attachments
-  const sql =
-    'SELECT DISTINCT digest AS digest FROM ' +
-    ATTACH_AND_SEQ_STORE +
-    ' WHERE seq IN (' +
-    seqs.map(() => '?').join(',') +
-    ') EXCEPT SELECT digest FROM ' +
-    ATTACH_AND_SEQ_STORE +
-    ' WHERE seq NOT IN (' +
-    seqs.map(() => '?').join(',') +
-    ')';
-  const res = await db.query(sql, [...seqs, ...seqs]);
-  if (res.values && res.values.length > 0) {
-    const digests = res.values.map((row) => row.digest);
-    for (const digest of digests) {
+async function deleteOrphans(
+  seqs: number[],
+  db: TransactionalSQLiteDatabase,
+  maxBoundParameters: number
+): Promise<void> {
+  const candidateDigests = new Set<string>();
+
+  for (const seqChunk of chunks(seqs, maxBoundParameters)) {
+    const placeholders = qMarks(seqChunk.length);
+    const result = await db.query(
+      'SELECT DISTINCT digest AS digest FROM ' +
+        ATTACH_AND_SEQ_STORE +
+        ' WHERE seq IN ' +
+        placeholders,
+      seqChunk
+    );
+    for (const row of result.values ?? []) {
+      candidateDigests.add(row.digest as string);
+    }
+    await db.run('DELETE FROM ' + ATTACH_AND_SEQ_STORE + ' WHERE seq IN ' + placeholders, seqChunk);
+  }
+
+  for (const digestChunk of chunks(Array.from(candidateDigests), maxBoundParameters)) {
+    const placeholders = qMarks(digestChunk.length);
+    const remaining = await db.query(
+      'SELECT DISTINCT digest AS digest FROM ' +
+        ATTACH_AND_SEQ_STORE +
+        ' WHERE digest IN ' +
+        placeholders,
+      digestChunk
+    );
+    const referenced = new Set((remaining.values ?? []).map((row) => row.digest as string));
+    const orphaned = digestChunk.filter((digest) => !referenced.has(digest));
+    if (orphaned.length) {
       await db.run(
-        'DELETE FROM ' +
-          ATTACH_AND_SEQ_STORE +
-          ' WHERE seq IN (' +
-          seqs.map(() => '?').join(',') +
-          ') AND digest=?',
-        [...seqs, digest]
+        'DELETE FROM ' + ATTACH_STORE + ' WHERE digest IN ' + qMarks(orphaned.length),
+        orphaned
       );
-      await db.run('DELETE FROM attachments WHERE digest=?', [digest]);
     }
   }
-  // Delete document revisions
-  await db.run(
-    'DELETE FROM ' + BY_SEQ_STORE + ' WHERE seq IN (' + seqs.map(() => '?').join(',') + ')',
-    seqs
-  );
+
+  for (const seqChunk of chunks(seqs, maxBoundParameters)) {
+    await db.run(
+      'DELETE FROM ' + BY_SEQ_STORE + ' WHERE seq IN ' + qMarks(seqChunk.length),
+      seqChunk
+    );
+  }
 }
 
 /**
