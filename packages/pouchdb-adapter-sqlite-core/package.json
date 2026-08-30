@@ -24,8 +24,7 @@
   },
   "homepage": "https://github.com/robince/pouchdb-adapter-sqlite/tree/cloudflare-do-adapter/packages/pouchdb-adapter-sqlite-core",
   "publishConfig": {
-    "access": "public",
-    "tag": "cloudflare-do"
+    "access": "public"
   },
   "scripts": {
     "build": "tsc",

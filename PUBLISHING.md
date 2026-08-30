@@ -34,12 +34,13 @@ The authenticated npm account must own the `@robince` scope.
 ## Publish
 
 ```sh
-npm publish ./packages/pouchdb-adapter-sqlite-core --access public --tag cloudflare-do
-npm publish ./packages/pouchdb-adapter-cloudflare-do --access public --tag cloudflare-do
+npm publish ./packages/pouchdb-adapter-sqlite-core --access public
+npm publish ./packages/pouchdb-adapter-cloudflare-do --access public
 ```
 
-The package manifests also set `access` to `public` and the dist-tag to
-`cloudflare-do`, keeping this prerelease away from the `latest` tag.
+The package manifests also set `access` to `public`. These scoped packages are
+the Cloudflare fork, so their newest published versions use npm's normal
+`latest` tag.
 
 Consumers should pin the adapter exactly:
 
