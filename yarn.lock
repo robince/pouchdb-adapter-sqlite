@@ -4067,6 +4067,43 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@robince/pouchdb-adapter-cloudflare-do@workspace:packages/pouchdb-adapter-cloudflare-do":
+  version: 0.0.0-use.local
+  resolution: "@robince/pouchdb-adapter-cloudflare-do@workspace:packages/pouchdb-adapter-cloudflare-do"
+  dependencies:
+    "@cloudflare/vitest-plugin": "npm:^1.1.0"
+    "@cloudflare/workers-types": "npm:^5.20260827.1"
+    "@types/pouchdb-core": "npm:^7.0.15"
+    "@vitest/runner": "npm:^4.1.0"
+    "@vitest/snapshot": "npm:^4.1.0"
+    pouchdb-adapter-sqlite-core: "npm:@robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0"
+    pouchdb-core: "npm:^9.0.0"
+    typescript: "npm:^5.8.3"
+    vitest: "npm:^4.1.0"
+  languageName: unknown
+  linkType: soft
+
+"@robince/pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core, pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core":
+  version: 0.0.0-use.local
+  resolution: "@robince/pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core"
+  dependencies:
+    "@types/debug": "npm:^4.1.8"
+    "@types/events": "npm:^3"
+    "@types/pouchdb-core": "npm:^7.0.15"
+    debug: "npm:^4.3.4"
+    events: "npm:^3.3.0"
+    pouchdb-adapter-utils: "npm:^9.0.0"
+    pouchdb-binary-utils: "npm:^9.0.0"
+    pouchdb-errors: "npm:^9.0.0"
+    pouchdb-json: "npm:^9.0.0"
+    pouchdb-md5: "npm:^9.0.0"
+    pouchdb-merge: "npm:^9.0.0"
+    pouchdb-utils: "npm:^9.0.0"
+    typescript: "npm:^5.3.3"
+    vitest: "npm:^4.1.0"
+  languageName: unknown
+  linkType: soft
+
 "@rolldown/binding-android-arm-eabi@npm:1.2.6":
   version: 1.2.6
   resolution: "@rolldown/binding-android-arm-eabi@npm:1.2.6"
@@ -14531,22 +14568,6 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"pouchdb-adapter-cloudflare-do@workspace:packages/pouchdb-adapter-cloudflare-do":
-  version: 0.0.0-use.local
-  resolution: "pouchdb-adapter-cloudflare-do@workspace:packages/pouchdb-adapter-cloudflare-do"
-  dependencies:
-    "@cloudflare/vitest-plugin": "npm:^1.1.0"
-    "@cloudflare/workers-types": "npm:^5.20260827.1"
-    "@types/pouchdb-core": "npm:^7.0.15"
-    "@vitest/runner": "npm:^4.1.0"
-    "@vitest/snapshot": "npm:^4.1.0"
-    pouchdb-adapter-sqlite-core: "workspace:^"
-    pouchdb-core: "npm:^9.0.0"
-    typescript: "npm:^5.8.3"
-    vitest: "npm:^4.1.0"
-  languageName: unknown
-  linkType: soft
-
 "pouchdb-adapter-expo-sqlite@workspace:^, pouchdb-adapter-expo-sqlite@workspace:packages/pouchdb-adapter-expo-sqlite":
   version: 0.0.0-use.local
   resolution: "pouchdb-adapter-expo-sqlite@workspace:packages/pouchdb-adapter-expo-sqlite"
@@ -14584,27 +14605,6 @@ __metadata:
   peerDependencies:
     "@op-engineering/op-sqlite": ^11.4.8
     react-native-blob-jsi-helper: "*"
-  languageName: unknown
-  linkType: soft
-
-"pouchdb-adapter-sqlite-core@npm:1.1.2, pouchdb-adapter-sqlite-core@workspace:^, pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core":
-  version: 0.0.0-use.local
-  resolution: "pouchdb-adapter-sqlite-core@workspace:packages/pouchdb-adapter-sqlite-core"
-  dependencies:
-    "@types/debug": "npm:^4.1.8"
-    "@types/events": "npm:^3"
-    "@types/pouchdb-core": "npm:^7.0.15"
-    debug: "npm:^4.3.4"
-    events: "npm:^3.3.0"
-    pouchdb-adapter-utils: "npm:^9.0.0"
-    pouchdb-binary-utils: "npm:^9.0.0"
-    pouchdb-errors: "npm:^9.0.0"
-    pouchdb-json: "npm:^9.0.0"
-    pouchdb-md5: "npm:^9.0.0"
-    pouchdb-merge: "npm:^9.0.0"
-    pouchdb-utils: "npm:^9.0.0"
-    typescript: "npm:^5.3.3"
-    vitest: "npm:^4.1.0"
   languageName: unknown
   linkType: soft
 

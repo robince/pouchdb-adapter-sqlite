@@ -1,6 +1,6 @@
 {
-  "name": "pouchdb-adapter-cloudflare-do",
-  "version": "0.1.0",
+  "name": "@robince/pouchdb-adapter-cloudflare-do",
+  "version": "1.1.2-cloudflare-do.0",
   "type": "module",
   "description": "PouchDB adapter for SQLite-backed Cloudflare Durable Objects",
   "main": "./lib/index.js",
@@ -18,9 +18,20 @@
     "lib",
     "src"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robince/pouchdb-adapter-sqlite.git",
+    "directory": "packages/pouchdb-adapter-cloudflare-do"
+  },
+  "homepage": "https://github.com/robince/pouchdb-adapter-sqlite/tree/cloudflare-do-adapter/packages/pouchdb-adapter-cloudflare-do",
+  "publishConfig": {
+    "access": "public",
+    "tag": "cloudflare-do"
+  },
   "scripts": {
     "build": "tsc",
-    "test": "yarn workspace pouchdb-adapter-sqlite-core build && vitest run test/adapter.test.ts",
+    "prepack": "npm run build",
+    "test": "yarn workspace @robince/pouchdb-adapter-sqlite-core build && vitest run test/adapter.test.ts",
     "watch": "tsc --watch"
   },
   "keywords": [
@@ -31,7 +42,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "pouchdb-adapter-sqlite-core": "workspace:^"
+    "pouchdb-adapter-sqlite-core": "npm:@robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.0",

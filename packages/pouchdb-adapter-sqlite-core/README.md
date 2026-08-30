@@ -18,9 +18,9 @@ The core adapter follows a layered design:
 ## Installation
 
 ```bash
-npm install pouchdb-adapter-sqlite-core
+npm install --save-exact @robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0
 # or
-yarn add pouchdb-adapter-sqlite-core
+yarn add --exact @robince/pouchdb-adapter-sqlite-core@1.1.2-cloudflare-do.0
 ```
 
 ``

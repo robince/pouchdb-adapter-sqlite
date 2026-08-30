@@ -4,6 +4,9 @@
     "packages/*",
     "examples/*"
   ],
+  "resolutions": {
+    "pouchdb-adapter-sqlite-core": "workspace:packages/pouchdb-adapter-sqlite-core"
+  },
   "type": "module",
   "private": true,
   "scripts": {
@@ -11,12 +14,13 @@
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "lint:fix": "eslint . --ext .js,.jsx,.ts,.tsx --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
-    "test": "yarn workspace pouchdb-adapter-sqlite-core test && yarn workspace pouchdb-adapter-sqlite-core build && yarn workspace pouchdb-adapter-cloudflare-do test",
-    "dev:core": "yarn workspace pouchdb-adapter-sqlite-core watch",
+    "test": "yarn workspace @robince/pouchdb-adapter-sqlite-core test && yarn workspace @robince/pouchdb-adapter-sqlite-core build && yarn workspace @robince/pouchdb-adapter-cloudflare-do test",
+    "dev:core": "yarn workspace @robince/pouchdb-adapter-sqlite-core watch",
     "dev:capacitor-sqlite": "concurrently 'yarn workspace pouchdb-adapter-capacitor-sqlite watch'  'yarn dev:core' ",
     "dev:opsqlite": "concurrently 'yarn workspace pouchdb-adapter-opsqlite watch'  'yarn dev:core'",
     "dev:expo-sqlite": "concurrently 'yarn workspace pouchdb-adapter-expo-sqlite watch'  'yarn dev:core'",
-    "prepack": "yarn workspace pouchdb-adapter-sqlite-core build && yarn workspaces foreach --all -p --include 'pouchdb-adapter-*' run build"
+    "prepack": "yarn workspace @robince/pouchdb-adapter-sqlite-core build && yarn workspace @robince/pouchdb-adapter-cloudflare-do build",
+    "pack:prerelease": "yarn workspace @robince/pouchdb-adapter-sqlite-core pack && yarn workspace @robince/pouchdb-adapter-cloudflare-do pack"
   },
   "repository": {
     "type": "git",

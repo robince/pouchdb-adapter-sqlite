@@ -1,6 +1,6 @@
 {
-  "name": "pouchdb-adapter-sqlite-core",
-  "version": "1.1.2",
+  "name": "@robince/pouchdb-adapter-sqlite-core",
+  "version": "1.1.2-cloudflare-do.0",
   "description": "PouchDB adapter using SQLite as its data store - core implementation",
   "main": "./lib/index.js",
   "exports": {
@@ -19,11 +19,17 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/BingCoke/pouchdb-adapter-sqlite.git"
+    "url": "git+https://github.com/robince/pouchdb-adapter-sqlite.git",
+    "directory": "packages/pouchdb-adapter-sqlite-core"
   },
-  "homepage": "https://github.com/BingCoke/pouchdb-adapter-sqlite",
+  "homepage": "https://github.com/robince/pouchdb-adapter-sqlite/tree/cloudflare-do-adapter/packages/pouchdb-adapter-sqlite-core",
+  "publishConfig": {
+    "access": "public",
+    "tag": "cloudflare-do"
+  },
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "watch": "tsc --watch",
     "test": "vitest run"
   },
