@@ -10,6 +10,7 @@ function adapter(): SQLiteAdapter {
       if (sql.includes("HEX('a')")) {
         return { values: [{ hex: '61' }] };
       }
+      if (sql.includes('SELECT doc_count')) return { values: [{ doc_count: 0 }] };
       return { values: [] };
     },
     async run() {
@@ -113,6 +114,7 @@ describe('core database lifecycle', () => {
         markSequenceStarted();
         await sequenceQuery;
       }
+      if (sql.includes('SELECT doc_count')) return { values: [{ doc_count: 0 }] };
       return { values: [] };
     };
 

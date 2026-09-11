@@ -1,5 +1,5 @@
 import { isLocalId, processDocs, parseDoc } from 'pouchdb-adapter-utils';
-import { compactTree } from 'pouchdb-merge';
+import { compactTree, isDeleted, winningRev as findWinningRev } from 'pouchdb-merge';
 import { safeJsonParse, safeJsonStringify } from 'pouchdb-json';
 import { MISSING_STUB, createError } from 'pouchdb-errors';
 
@@ -11,6 +11,7 @@ import {
   TransactionalSQLiteAdapter,
   TransactionalSQLiteDatabase,
 } from './interfaces';
+import { incrementDocumentCount } from './documentCount';
 import { logger } from './logger';
 import { preprocessAttachments } from './processAttachment';
 
@@ -86,6 +87,9 @@ async function sqliteBulkDocs(
   let db: TransactionalSQLiteAdapter;
   const results = new Array(docInfos.length);
   const fetchedDocs = new Map<string, any>();
+  // processDocs mutates fetched revision trees before writeDoc: preserve old states separately.
+  const liveStates = new Map<string, boolean>();
+  let countDelta = 0;
 
   /**
    * Verify attachment
@@ -142,7 +146,7 @@ async function sqliteBulkDocs(
   async function writeDoc(
     docInfo: DocInfo,
     winningRev: string,
-    _winningRevIsDeleted: boolean,
+    winningRevIsDeleted: boolean,
     newRevIsDeleted: boolean,
     isUpdate: boolean,
     _delta: number,
@@ -278,6 +282,9 @@ async function sqliteBulkDocs(
       await insertAttachmentMappings(seq);
     }
     await dataWritten(db, seq);
+    const nowLive = !winningRevIsDeleted;
+    countDelta += Number(nowLive) - Number(liveStates.get(id) || false);
+    liveStates.set(id, nowLive);
   }
 
   /**
@@ -286,6 +293,10 @@ async function sqliteBulkDocs(
   function websqlProcessDocs(): Promise<void> {
     return new Promise((resolve, reject) => {
       let chain = Promise.resolve();
+      if (!docInfos.length) {
+        resolve();
+        return;
+      }
       processDocs(
         dbOpts.revs_limit,
         docInfos,
@@ -312,8 +323,10 @@ async function sqliteBulkDocs(
               isUpdate,
               delta,
               resultsIdx
-            ).then(() => callback(), callback);
+            ).then(() => callback());
           });
+          // Keep the chain rejected so already queued writes cannot run.
+          void chain.catch(reject);
         },
         opts,
         (err?: any) => {
@@ -339,6 +352,7 @@ async function sqliteBulkDocs(
       if (result.values && result.values.length) {
         const metadata = safeJsonParse(result.values[0].json);
         fetchedDocs.set(id, metadata);
+        liveStates.set(id, !isDeleted(metadata, findWinningRev(metadata)));
       }
     }
   }
@@ -379,16 +393,21 @@ async function sqliteBulkDocs(
   // Execute operations in transaction
   await transaction(async (txn: TransactionalSQLiteDatabase) => {
     db = txn;
+    fetchedDocs.clear();
+    liveStates.clear();
+    results.fill(undefined);
+    countDelta = 0;
     await verifyAttachments();
     try {
       await fetchExistingDocs();
       await websqlProcessDocs();
-      sqliteChanges.notify(api._name);
+      await incrementDocumentCount(db, countDelta);
     } catch (err: any) {
       throw handleSQLiteError(err);
     }
   });
 
+  sqliteChanges.notify(api._name);
   return results;
 }
 

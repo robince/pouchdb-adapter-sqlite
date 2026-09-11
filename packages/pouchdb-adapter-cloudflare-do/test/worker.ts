@@ -18,6 +18,313 @@ export class PouchDatabase extends DurableObject<Env> {
     this.db = new PouchDB('db', cloudflareDOOptions(ctx.storage));
   }
 
+  async countOracle() {
+    await this.db.info();
+    return this.ctx.storage.sql
+      .exec<{
+        count: number;
+      }>(
+        'SELECT COUNT(d.id) AS count FROM "document-store" d JOIN "by-sequence" b ON b.seq=d.winningseq WHERE b.deleted=0'
+      )
+      .one().count;
+  }
+
+  async countFailure(stage: string) {
+    await this.db.info();
+    const storage = this.ctx.storage;
+    let armed = false;
+    const wrapped = {
+      sql: {
+        exec: (query: string, ...bindings: any[]) => {
+          if (
+            armed &&
+            ((stage === 'document' && query.startsWith("INSERT INTO 'document-store'")) ||
+              (stage === 'counter' && query.includes('SET doc_count = doc_count +')))
+          ) {
+            throw new Error('injected count failure');
+          }
+          return storage.sql.exec(query, ...bindings);
+        },
+      },
+      transaction: <T>(fn: () => Promise<T>) =>
+        storage.transaction(async () => {
+          const result = await fn();
+          if (armed && stage === 'commit') throw new Error('injected commit failure');
+          return result;
+        }),
+    };
+    const fresh = new PouchDB('db', cloudflareDOOptions(wrapped));
+    await fresh.info();
+    let rejected = false;
+    try {
+      armed = true;
+      await fresh.bulkDocs([{ _id: 'failed-a' }, { _id: 'failed-b' }]);
+    } catch {
+      rejected = true;
+    } finally {
+      armed = false;
+      await fresh.close();
+    }
+    return {
+      rejected,
+      count: await this.countOracle(),
+      persisted: (await this.db.info()).doc_count,
+    };
+  }
+
+  async countProbe(kind: string) {
+    await this.db.info();
+    await this.db.close();
+    const sql = this.ctx.storage.sql;
+    if (kind.startsWith('migration')) {
+      if (kind !== 'migration-existing')
+        sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
+      else sql.exec('UPDATE "metadata-store" SET doc_count=123');
+      sql.exec('UPDATE "metadata-store" SET db_version=1');
+      if (kind === 'migration-legacy')
+        sql.exec('ALTER TABLE "metadata-store" DROP COLUMN db_version');
+    } else if (kind === 'missing-count')
+      sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
+    else if (kind === 'fraction') sql.exec('UPDATE "metadata-store" SET doc_count=0.5');
+    else if (kind === 'future') sql.exec('UPDATE "metadata-store" SET db_version=99');
+    else if (kind === 'missing') sql.exec('DELETE FROM "metadata-store"');
+    else if (kind === 'duplicate')
+      sql.exec('INSERT INTO "metadata-store" SELECT * FROM "metadata-store"');
+    else if (kind === 'unsafe') sql.exec('UPDATE "metadata-store" SET doc_count=9007199254740992');
+    const fresh = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+    try {
+      return await fresh.info();
+    } catch {
+      return { rejected: true };
+    } finally {
+      await fresh.close().catch(() => {});
+    }
+  }
+
+  async migratedConflictProbe(newEdits: boolean) {
+    await this.db.bulkDocs(
+      [
+        { _id: 'a', _rev: '1-z' },
+        { _id: 'a', _rev: '1-b' },
+      ],
+      { new_edits: false }
+    );
+    await this.db.bulkDocs(
+      [{ _id: 'a', _rev: '2-c', _deleted: true, _revisions: { start: 2, ids: ['c', 'b'] } }],
+      { new_edits: false }
+    );
+    await this.db.close();
+    this.ctx.storage.sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
+    this.ctx.storage.sql.exec('UPDATE "metadata-store" SET db_version=1');
+    const fresh = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+    try {
+      const before = (await fresh.info()).doc_count;
+      if (newEdits) await fresh.put({ _id: 'a', _rev: '1-z', value: 'updated' });
+      else
+        await fresh.bulkDocs(
+          [{ _id: 'a', _rev: '2-z', _revisions: { start: 2, ids: ['z', 'z'] } }],
+          { new_edits: false }
+        );
+      const after = (await fresh.info()).doc_count;
+      const all = (await fresh.allDocs({})).total_rows;
+      return { before, after, all };
+    } finally {
+      await fresh.close();
+    }
+  }
+
+  async attachmentFailureProbe() {
+    await this.db.put({
+      _id: 'attached',
+      _attachments: { 'a.txt': { content_type: 'text/plain', data: 'YQ==' } },
+    });
+    let rejected = false;
+    try {
+      await this.db.bulkDocs([
+        {
+          _id: 'invalid',
+          _attachments: {
+            'missing.txt': { stub: true, digest: 'missing', content_type: 'text/plain' },
+          },
+        },
+      ]);
+    } catch {
+      rejected = true;
+    }
+    await this.db.bulkDocs([{ _id: '_local/only' }]);
+    return { rejected, count: (await this.db.info()).doc_count, oracle: await this.countOracle() };
+  }
+
+  async concurrentCountProbe() {
+    await this.db.info();
+    const fresh = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+    try {
+      await fresh.info();
+      await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          (i % 2 ? fresh : this.db).put({ _id: `concurrent-${i}` })
+        )
+      );
+      return {
+        first: (await this.db.info()).doc_count,
+        second: (await fresh.info()).doc_count,
+        oracle: await this.countOracle(),
+      };
+    } finally {
+      await fresh.close();
+    }
+  }
+
+  async migrationFailure(stage: string) {
+    await this.db.put({ _id: 'survivor' });
+    await this.db.close();
+    const storage = this.ctx.storage;
+    storage.sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
+    storage.sql.exec('UPDATE "metadata-store" SET db_version=1');
+    let recounts = 0;
+    let fail = true;
+    const wrapped = {
+      sql: {
+        exec: (query: string, ...bindings: any[]) => {
+          const cursor = storage.sql.exec(query, ...bindings);
+          if (query.includes('SELECT COUNT(d.id)')) recounts++;
+          if (
+            fail &&
+            ((stage === 'column' && query.includes('ADD COLUMN doc_count')) ||
+              (stage === 'count' && query.includes('SET doc_count = ?')) ||
+              (stage === 'version' && query.includes('SET db_version = ?')))
+          )
+            throw new Error('migration failure');
+          return cursor;
+        },
+      },
+      transaction: <T>(fn: () => Promise<T>) => storage.transaction(fn),
+    };
+    const broken = new PouchDB('db', cloudflareDOOptions(wrapped));
+    let rejected = false;
+    try {
+      await broken.info();
+    } catch {
+      rejected = true;
+    }
+    await broken.close().catch(() => {});
+    const version = storage.sql.exec('SELECT db_version FROM "metadata-store"').one().db_version;
+    const hasCount = storage.sql
+      .exec('PRAGMA table_info("metadata-store")')
+      .toArray()
+      .some((row) => row.name === 'doc_count');
+    fail = false;
+    recounts = 0;
+    const fresh = new PouchDB('db', cloudflareDOOptions(wrapped));
+    const info = await fresh.info();
+    await fresh.close();
+    const migrationRecounts = recounts;
+    const reopened = new PouchDB('db', cloudflareDOOptions(wrapped));
+    await reopened.info();
+    await reopened.close();
+    return { rejected, version, hasCount, count: info.doc_count, migrationRecounts, recounts };
+  }
+
+  async countLifecycleProbe() {
+    await this.db.info();
+    const options = {
+      ...cloudflareDOOptions(this.ctx.storage),
+      auto_compaction: true,
+      revs_limit: 2,
+    };
+    const fresh = new PouchDB('db', options);
+    try {
+      for (let i = 0; i < 5; i++) {
+        const doc = i ? await fresh.get('history') : { _id: 'history' };
+        await fresh.put({ ...doc, value: i });
+      }
+      await fresh.compact();
+      const count = (await fresh.info()).doc_count;
+      const oracle = await this.countOracle();
+      await fresh.destroy();
+      const recreated = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+      try {
+        return { count, oracle, recreated: (await recreated.info()).doc_count };
+      } finally {
+        await recreated.close();
+      }
+    } finally {
+      await fresh.close().catch(() => {});
+    }
+  }
+
+  async measuredCounts(size: number, depth: number, deletedFraction: number) {
+    await this.db.bulkDocs(Array.from({ length: size }, (_, i) => ({ _id: `bench-${i}` })));
+    for (let revision = 1; revision < depth; revision++) {
+      const all = await this.db.allDocs({ include_docs: true });
+      await this.db.bulkDocs(all.rows.map((row) => ({ ...row.doc!, value: revision })));
+    }
+    const all = await this.db.allDocs({ include_docs: true });
+    await this.db.bulkDocs(
+      all.rows
+        .slice(0, Math.floor(size * deletedFraction))
+        .map((row) => ({ ...row.doc!, _deleted: true }))
+    );
+    let legacyCount = false;
+    let reads = 0,
+      writes = 0,
+      updates = 0;
+    const storage = this.ctx.storage;
+    const measured = {
+      sql: {
+        exec: (query: string, ...bindings: any[]) => {
+          if (legacyCount && query.startsWith('SELECT doc_count FROM')) {
+            query =
+              'SELECT COUNT(d.id) AS doc_count FROM "document-store" d JOIN "by-sequence" b ON b.seq=d.winningseq WHERE b.deleted=0';
+          }
+          const cursor = storage.sql.exec(query, ...bindings);
+          const rows = cursor.toArray();
+          reads += cursor.rowsRead;
+          writes += cursor.rowsWritten;
+          if (query.includes('SET doc_count = doc_count +')) updates++;
+          return { toArray: () => rows, rowsWritten: cursor.rowsWritten };
+        },
+      },
+      transaction: <T>(fn: () => Promise<T>) => storage.transaction(fn),
+    };
+    const fresh = new PouchDB('db', cloudflareDOOptions(measured));
+    await fresh.info();
+    const result: Record<string, unknown> = {};
+    const measure = async (name: string, operation: () => Promise<unknown>) => {
+      reads = writes = updates = 0;
+      await operation();
+      result[name] = { reads, writes, updates };
+    };
+    try {
+      await measure('info', () => fresh.info());
+      const live = (await fresh.allDocs({ limit: 1 })).rows[0].id;
+      await measure('keys', () => fresh.allDocs({ keys: [live] }));
+      await measure('limit0', () => fresh.allDocs({ limit: 0 }));
+      legacyCount = true;
+      await measure('baselineInfo', () => fresh.info());
+      await measure('baselineKeys', () => fresh.allDocs({ keys: [live] }));
+      await measure('baselineLimit0', () => fresh.allDocs({ limit: 0 }));
+      legacyCount = false;
+      const doc = await fresh.get(live);
+      await measure('update', () => fresh.put({ ...doc, value: 'updated' }));
+      const updated = await fresh.get(live);
+      await measure('netZero', () =>
+        fresh.bulkDocs([{ ...updated, _deleted: true }, { _id: 'replacement' }])
+      );
+      await measure('create', () => fresh.bulkDocs([{ _id: 'extra-a' }, { _id: 'extra-b' }]));
+      await measure('recount', async () =>
+        measured.sql
+          .exec(
+            'SELECT COUNT(d.id) AS count FROM "document-store" d JOIN "by-sequence" b ON b.seq=d.winningseq WHERE b.deleted=0'
+          )
+          .toArray()
+      );
+      return result;
+    } finally {
+      await fresh.close();
+    }
+  }
+
   async put(doc: Record<string, unknown>) {
     return this.db.put(doc);
   }
@@ -42,11 +349,11 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async bulkDocs(docs: Array<Record<string, unknown>>, options?: PouchDB.Core.BulkDocsOptions) {
-    return this.db.bulkDocs(docs, options);
+    return (await this.db.bulkDocs(docs, options)).map((result) => ({ ...result }));
   }
 
   async allDocs(options?: PouchDB.Core.AllDocsOptions) {
-    return this.db.allDocs(options);
+    return this.db.allDocs(options || {});
   }
 
   async info() {

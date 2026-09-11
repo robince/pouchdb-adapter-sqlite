@@ -57,6 +57,7 @@ describe('PouchDB Durable Object SQLite adapter', () => {
 
     const all = await db.allDocs({ include_docs: true, attachments: true });
     expect(all.rows[0].doc?._attachments?.['file.txt'].data).toBe('YXR0YWNobWVudA==');
+    expect(all.total_rows).toBe(await db.countOracle());
 
     const changes = await db.changes({ since: 0, include_docs: true, attachments: true });
     expect(changes.results[0].doc?._attachments?.['file.txt'].data).toBe('YXR0YWNobWVudA==');
@@ -328,4 +329,174 @@ describe('PouchDB Durable Object SQLite adapter', () => {
   it('preserves PouchDB errors raised inside the purge transaction', async () => {
     expect(await database('purge-errors').rawPurgeStatus('missing', ['1-missing'])).toBe(404);
   });
+});
+
+describe('persistent document counts', () => {
+  async function exact(db: ReturnType<typeof database>, expected?: number) {
+    const oracle = await db.countOracle();
+    expect((await db.info()).doc_count).toBe(oracle);
+    expect((await db.allDocs()).total_rows).toBe(oracle);
+    if (expected !== undefined) expect(oracle).toBe(expected);
+  }
+  it('counts live transitions, local/design documents, partial failures and purge', async () => {
+    const db = database('count-transitions');
+    await exact(db, 0);
+    await db.bulkDocs([{ _id: 'a' }, { _id: '_design/example' }, { _id: '_local/checkpoint' }]);
+    await exact(db, 2);
+    await db.bulkDocs([{ _id: 'a' }, { _id: 'b' }]);
+    await exact(db, 3);
+    const a = await db.get('a');
+    await db.remove('a', a._rev);
+    await exact(db, 2);
+    await db.put({ _id: 'a' });
+    await exact(db, 3);
+    const b = await db.get('b');
+    await db.purge('b', b._rev);
+    await exact(db, 2);
+  });
+  it.each([true, false])('ignores stale deleted flags with new_edits=%s', async (newEdits) => {
+    const db = database(`count-conflict-${newEdits}`);
+    await db.bulkDocs(
+      [
+        { _id: 'a', _rev: '1-z' },
+        { _id: 'a', _rev: '1-b' },
+      ],
+      { new_edits: false }
+    );
+    await exact(db, 1);
+    if (newEdits) {
+      await db.bulkDocs([
+        { _id: 'a', _rev: '1-b', _deleted: true },
+        { _id: 'a', _rev: '1-z', value: 1 },
+      ]);
+    } else {
+      await db.bulkDocs(
+        [
+          { _id: 'a', _rev: '2-c', _deleted: true, _revisions: { start: 2, ids: ['c', 'b'] } },
+          { _id: 'a', _rev: '2-z', _revisions: { start: 2, ids: ['z', 'z'] } },
+        ],
+        { new_edits: false }
+      );
+    }
+    await exact(db, 1);
+  });
+  it.each(['document', 'counter', 'commit'])('rolls back %s failures', async (stage) => {
+    expect(await database(`count-failure-${stage}`).countFailure(stage)).toEqual({
+      rejected: true,
+      count: 0,
+      persisted: 0,
+    });
+  });
+  it.each(['column', 'count', 'version'])(
+    'rolls back interrupted migration after %s',
+    async (stage) => {
+      expect(await database(`count-migration-failure-${stage}`).migrationFailure(stage)).toEqual({
+        rejected: true,
+        version: 1,
+        hasCount: false,
+        count: 1,
+        migrationRecounts: 1,
+        recounts: 1,
+      });
+    }
+  );
+  it('preserves counts through stemming, compaction, destroy and recreation', async () => {
+    expect(await database('count-compaction-destroy').countLifecycleProbe()).toEqual({
+      count: 1,
+      oracle: 1,
+      recreated: 0,
+    });
+  });
+  it.each([true, false])('updates a migrated stale winner with new_edits=%s', async (newEdits) => {
+    expect(
+      await database(`count-migrated-conflict-${newEdits}`).migratedConflictProbe(newEdits)
+    ).toEqual({ before: 1, after: 1, all: 1 });
+  });
+  it('serializes writes through two handles', async () => {
+    expect(await database('count-concurrent').concurrentCountProbe()).toEqual({
+      first: 20,
+      second: 20,
+      oracle: 20,
+    });
+  });
+  it('counts purge of losing, winning and deleted leaves exactly', async () => {
+    const db = database('count-purge-leaves');
+    await db.bulkDocs(
+      [
+        { _id: 'a', _rev: '1-z' },
+        { _id: 'a', _rev: '1-b' },
+      ],
+      { new_edits: false }
+    );
+    await db.purge('a', '1-b');
+    await exact(db, 1);
+    await db.bulkDocs([{ _id: 'a', _rev: '1-c', _deleted: true }], { new_edits: false });
+    await db.purge('a', '1-z');
+    await exact(db, 0);
+    await db.purge('a', '1-c');
+    await exact(db, 0);
+  });
+  it('keeps attachment failures and local-only batches count-neutral', async () => {
+    expect(await database('count-attachment-failure').attachmentFailureProbe()).toEqual({
+      rejected: true,
+      count: 1,
+      oracle: 1,
+    });
+  });
+  it('preserves totals for key, range, limit and sequence queries', async () => {
+    const db = database('count-query-options');
+    await db.bulkDocs([{ _id: 'a' }, { _id: 'b' }, { _id: 'c' }]);
+    const b = await db.get('b');
+    await db.remove('b', b._rev);
+    for (const options of [
+      { keys: [] },
+      { keys: ['a', 'b', 'missing', 'a'] },
+      { startkey: 'b', endkey: 'z', limit: 1 },
+      { limit: 0 },
+      { update_seq: true },
+    ]) {
+      const all = await db.allDocs(options);
+      expect(all.total_rows).toBe(2);
+      if ('update_seq' in options) expect(all.update_seq).toBe(4);
+    }
+    const keyed = await db.allDocs({ keys: ['b', 'missing'] });
+    expect(keyed.rows[0].value).toMatchObject({ deleted: true });
+    expect(keyed.rows[1]).toMatchObject({ error: 'not_found' });
+  });
+  it.each(['migration', 'migration-legacy', 'migration-existing'])(
+    'migrates populated %s metadata',
+    async (kind) => {
+      const db = database(`count-${kind}`);
+      await db.bulkDocs([{ _id: 'a' }, { _id: 'b' }, { _id: '_local/x' }]);
+      expect((await db.countProbe(kind)).doc_count).toBe(2);
+    }
+  );
+  it.each(['future', 'missing', 'duplicate', 'unsafe', 'missing-count', 'fraction'])(
+    'rejects %s metadata',
+    async (kind) => {
+      expect(await database(`count-invalid-${kind}`).countProbe(kind)).toEqual({ rejected: true });
+    }
+  );
+  it.each([10, 100, 1000])(
+    'measures bounded count reads for %s documents',
+    async (size) => {
+      for (const [depth, deleted] of [
+        [1, 0],
+        [3, 0.3],
+      ]) {
+        const metrics = (await database(`count-bench-${size}-${depth}`).measuredCounts(
+          size,
+          depth,
+          deleted
+        )) as any;
+        expect({ size, depth, deleted, metrics }).toMatchSnapshot();
+        expect(metrics.info.reads).toBeLessThanOrEqual(3);
+        expect(metrics.limit0.reads).toBeLessThanOrEqual(2);
+        expect(metrics.update.updates).toBe(0);
+        expect(metrics.netZero.updates).toBe(0);
+        expect(metrics.create.updates).toBe(1);
+      }
+    },
+    60000
+  );
 });
