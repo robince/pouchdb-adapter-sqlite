@@ -463,7 +463,7 @@ describe('persistent document counts', () => {
     expect(keyed.rows[0].value).toMatchObject({ deleted: true });
     expect(keyed.rows[1]).toMatchObject({ error: 'not_found' });
   });
-  it.each(['migration', 'migration-legacy', 'migration-existing'])(
+  it.each(['migration', 'migration-legacy', 'migration-existing', 'migration-null'])(
     'migrates populated %s metadata',
     async (kind) => {
       const db = database(`count-${kind}`);

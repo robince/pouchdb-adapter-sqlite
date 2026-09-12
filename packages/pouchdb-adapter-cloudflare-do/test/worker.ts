@@ -81,6 +81,8 @@ export class PouchDatabase extends DurableObject<Env> {
         sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
       else sql.exec('UPDATE "metadata-store" SET doc_count=123');
       sql.exec('UPDATE "metadata-store" SET db_version=1');
+      // Reproduce the old adapter's ADD COLUMN without populating its value.
+      if (kind === 'migration-null') sql.exec('UPDATE "metadata-store" SET db_version=NULL');
       if (kind === 'migration-legacy')
         sql.exec('ALTER TABLE "metadata-store" DROP COLUMN db_version');
     } else if (kind === 'missing-count')

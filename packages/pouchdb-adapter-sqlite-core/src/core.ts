@@ -237,7 +237,9 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     if (rows?.length !== 1 || typeof rows[0].dbid !== 'string' || !rows[0].dbid.length) {
       throw new Error('Invalid SQLite metadata row');
     }
-    const version = names.has('db_version') ? rows[0].db_version : 1;
+    // The version-1 adapter could add db_version without populating it.
+    const version =
+      !names.has('db_version') || rows[0].db_version === null ? 1 : rows[0].db_version;
     if (!Number.isInteger(version) || version < 1 || version > ADAPTER_VERSION) {
       throw new Error('Unsupported SQLite schema version: ' + version);
     }

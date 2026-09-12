@@ -15,8 +15,8 @@ export async function readDocumentCount(db: TransactionalSQLiteDatabase): Promis
 }
 
 export async function incrementDocumentCount(db: TransactionalSQLiteDatabase, delta: number) {
-  if (!delta) return;
   if (!Number.isSafeInteger(delta)) throw new Error('Invalid document count delta');
+  if (delta === 0) return;
   const result = await db.run('UPDATE ' + META_STORE + ' SET doc_count = doc_count + ?', [delta]);
   if (result.changes?.changes !== 1) throw new Error('Expected exactly one SQLite metadata update');
   // One bounded read for nonzero batches also catches unsafe integer overflow.
