@@ -72,6 +72,96 @@ export class PouchDatabase extends DurableObject<Env> {
     };
   }
 
+  async bulkFailureProbe() {
+    await this.db.info();
+    const storage = this.ctx.storage;
+    let armed = false;
+    let injected = false;
+    const wrapped = {
+      sql: {
+        exec: (query: string, ...bindings: any[]) => {
+          const cursor = storage.sql.exec(query, ...bindings);
+          if (armed && !injected && query.startsWith("INSERT INTO 'document-store'")) {
+            injected = true;
+            throw new Error('injected after document insert');
+          }
+          return cursor;
+        },
+      },
+      transaction: <T>(fn: () => Promise<T>) => storage.transaction(fn),
+    };
+    const fresh = new PouchDB('db', cloudflareDOOptions(wrapped));
+    try {
+      let rejected = false;
+      let reason: string | undefined;
+      try {
+        await fresh.info();
+        armed = true;
+        await fresh.bulkDocs([{ _id: 'failed-a' }, { _id: 'failed-b' }]);
+      } catch (error) {
+        rejected = true;
+        if (typeof error === 'object' && error !== null && 'reason' in error) {
+          reason = String((error as { reason: unknown }).reason);
+        } else {
+          reason = String(error);
+        }
+      } finally {
+        armed = false;
+      }
+
+      const physical = {
+        documents: storage.sql
+          .exec<{ count: number }>("SELECT COUNT(*) AS count FROM 'document-store'")
+          .one().count,
+        sequences: storage.sql
+          .exec<{ count: number }>("SELECT COUNT(*) AS count FROM 'by-sequence'")
+          .one().count,
+        docCount: storage.sql
+          .exec<{ doc_count: number }>("SELECT doc_count FROM 'metadata-store'")
+          .one().doc_count,
+        maxSequence: storage.sql
+          .exec<{ sequence: number }>("SELECT COALESCE(MAX(seq), 0) AS sequence FROM 'by-sequence'")
+          .one().sequence,
+        sqliteSequence: storage.sql
+          .exec<{
+            sequence: number;
+          }>(
+            "SELECT COALESCE(MAX(seq), 0) AS sequence FROM sqlite_sequence WHERE name='by-sequence'"
+          )
+          .one().sequence,
+      };
+      const status = async (id: string) => {
+        try {
+          await fresh.get(id);
+          return 200;
+        } catch (error) {
+          return typeof error === 'object' && error !== null && 'status' in error
+            ? Number(error.status)
+            : 500;
+        }
+      };
+      const beforeInfo = await fresh.info();
+      const beforeFollowUp = {
+        info: beforeInfo,
+        rows: (await fresh.allDocs()).rows.map((row) => row.id),
+        changes: (await fresh.changes({ since: 0 })).results.map((row) => row.id),
+        failedA: await status('failed-a'),
+        failedB: await status('failed-b'),
+      };
+      const followUp = await fresh.bulkDocs([{ _id: 'after-failure' }]);
+      const afterInfo = await fresh.info();
+      const afterFollowUp = {
+        info: afterInfo,
+        rows: (await fresh.allDocs()).rows.map((row) => row.id),
+        changes: (await fresh.changes({ since: 0 })).results.map((row) => row.id),
+        results: followUp.map((result) => ({ ok: result.ok, id: result.id })),
+      };
+      return { rejected, reason, injected, physical, beforeFollowUp, afterFollowUp };
+    } finally {
+      await fresh.close();
+    }
+  }
+
   async countProbe(kind: string) {
     await this.db.info();
     const setup = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));

@@ -198,11 +198,28 @@ async function deleteOrphans(
  */
 export function handleSQLiteError(event: Error, callback?: (err: any) => void): any {
   guardedConsole('error', 'SQLite threw an error', event);
-  // event may actually be a SQLError object, so report is as such
-  const errorNameMatch = event && event.constructor.toString().match(/function ([^(]+)/);
-  const errorName = (errorNameMatch && errorNameMatch[1]) || event.name;
+  // bulkDocs normalizes errors inside its transaction callback before the
+  // outer adapter callback sees them. Preserve that PouchDB error when the
+  // outer layer handles it again, rather than replacing its useful reason
+  // with the generic `unknown` message.
+  if (
+    event &&
+    typeof event === 'object' &&
+    'error' in event &&
+    event.error === true &&
+    'status' in event &&
+    event.status === WSQ_ERROR.status &&
+    event.name === WSQ_ERROR.name &&
+    'reason' in event
+  ) {
+    if (callback) callback(event);
+    else return event;
+    return;
+  }
+
+  // event may actually be a SQLError object, so report its message as-is.
   const errorReason = event.message;
-  const error = createError(WSQ_ERROR, errorReason, errorName);
+  const error = createError(WSQ_ERROR, errorReason);
   if (callback) callback(error);
   else return error;
 }
