@@ -11,6 +11,7 @@
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "lint:fix": "eslint . --ext .js,.jsx,.ts,.tsx --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
+    "test": "yarn workspace pouchdb-adapter-sqlite-core test && yarn workspace pouchdb-adapter-sqlite-core build && yarn workspace pouchdb-adapter-cloudflare-do test",
     "dev:core": "yarn workspace pouchdb-adapter-sqlite-core watch",
     "dev:capacitor-sqlite": "concurrently 'yarn workspace pouchdb-adapter-capacitor-sqlite watch'  'yarn dev:core' ",
     "dev:opsqlite": "concurrently 'yarn workspace pouchdb-adapter-opsqlite watch'  'yarn dev:core'",

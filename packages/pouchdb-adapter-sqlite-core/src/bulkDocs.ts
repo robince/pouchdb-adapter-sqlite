@@ -1,5 +1,5 @@
 import { isLocalId, processDocs, parseDoc } from 'pouchdb-adapter-utils';
-import { compactTree } from 'pouchdb-merge';
+import { compactTree, isDeleted, winningRev as findWinningRev } from 'pouchdb-merge';
 import { safeJsonParse, safeJsonStringify } from 'pouchdb-json';
 import { MISSING_STUB, createError } from 'pouchdb-errors';
 
@@ -8,9 +8,10 @@ import { DOC_STORE, BY_SEQ_STORE, ATTACH_STORE, ATTACH_AND_SEQ_STORE } from './c
 import { select, stringifyDoc, compactRevs, handleSQLiteError, escapeBlob } from './utils';
 import {
   BinarySerializer,
-  SQLiteLoggerAdapter as SQLiteAdapter,
-  SQLiteDatabase,
+  TransactionalSQLiteAdapter,
+  TransactionalSQLiteDatabase,
 } from './interfaces';
+import { incrementDocumentCount } from './documentCount';
 import { logger } from './logger';
 import { preprocessAttachments } from './processAttachment';
 
@@ -30,6 +31,7 @@ interface DocInfo {
  */
 interface DBOptions {
   revs_limit?: number;
+  maxBoundParameters?: number;
 }
 
 /**
@@ -61,7 +63,7 @@ async function sqliteBulkDocs(
   req: Request,
   opts: Options,
   api: any,
-  transaction: (fn: (db: SQLiteDatabase) => Promise<void>) => Promise<void>,
+  transaction: (fn: (db: TransactionalSQLiteDatabase) => Promise<void>) => Promise<void>,
   sqliteChanges: any
 ): Promise<any> {
   const newEdits = opts.new_edits;
@@ -82,9 +84,12 @@ async function sqliteBulkDocs(
     throw docInfoErrors[0];
   }
 
-  let db: SQLiteAdapter;
+  let db: TransactionalSQLiteAdapter;
   const results = new Array(docInfos.length);
   const fetchedDocs = new Map<string, any>();
+  // processDocs mutates fetched revision trees before writeDoc: preserve old states separately.
+  const liveStates = new Map<string, boolean>();
+  let countDelta = 0;
 
   /**
    * Verify attachment
@@ -141,7 +146,7 @@ async function sqliteBulkDocs(
   async function writeDoc(
     docInfo: DocInfo,
     winningRev: string,
-    _winningRevIsDeleted: boolean,
+    winningRevIsDeleted: boolean,
     newRevIsDeleted: boolean,
     isUpdate: boolean,
     _delta: number,
@@ -154,7 +159,7 @@ async function sqliteBulkDocs(
      * @param db Database connection
      * @param seq Sequence number
      */
-    async function dataWritten(db: SQLiteDatabase, seq: number) {
+    async function dataWritten(db: TransactionalSQLiteDatabase, seq: number) {
       const id = docInfo.metadata.id;
 
       let revsToCompact = docInfo.stemmedRevs || [];
@@ -162,7 +167,7 @@ async function sqliteBulkDocs(
         revsToCompact = compactTree(docInfo.metadata).concat(revsToCompact);
       }
       if (revsToCompact.length) {
-        compactRevs(revsToCompact, id, db);
+        await compactRevs(revsToCompact, id, db, dbOpts.maxBoundParameters);
       }
 
       docInfo.metadata.seq = seq;
@@ -243,31 +248,43 @@ async function sqliteBulkDocs(
       'INSERT INTO ' + BY_SEQ_STORE + ' (doc_id, rev, json, deleted) VALUES (?, ?, ?, ?);';
     const sqlArgs = [id, rev, json, deletedInt];
 
+    let seq: number;
+    let recoveredExistingSequence = false;
     try {
       const result = await db.run(sql, sqlArgs);
-      if (result.changes && result.changes.lastId) {
-        const seq = result.changes.lastId;
-        await insertAttachmentMappings(seq);
-        await dataWritten(db, seq);
+      const insertedSeq = result.changes?.lastId;
+      if (!insertedSeq) {
+        throw new Error('SQLite insert did not return a sequence identifier');
       }
+      seq = insertedSeq;
     } catch (e) {
       // Constraint error, recover by updating
       const fetchSql = select('seq', BY_SEQ_STORE, undefined, 'doc_id=? AND rev=?');
       const res = await db.query(fetchSql, [id, rev]);
       if (res.values && res.values.length > 0) {
-        const seq = res.values[0].seq as number;
+        seq = res.values[0].seq as number;
+        recoveredExistingSequence = true;
         logger.debug(
           `Encountered constraint error, switching to update: seq=${seq}, id=${id}, rev=${rev}`
         );
-        const sql = 'UPDATE ' + BY_SEQ_STORE + ' SET json=?, deleted=? WHERE doc_id=? AND rev=?;';
-        const sqlArgs = [json, deletedInt, id, rev];
-        await db.run(sql, sqlArgs);
-        await insertAttachmentMappings(seq);
-        await dataWritten(db, seq);
+        const updateSql =
+          'UPDATE ' + BY_SEQ_STORE + ' SET json=?, deleted=? WHERE doc_id=? AND rev=?;';
+        await db.run(updateSql, [json, deletedInt, id, rev]);
       } else {
         throw e;
       }
     }
+
+    // Only the initial by-sequence INSERT participates in conflict recovery.
+    // Failures in attachment mapping, compaction, or document metadata must
+    // abort the transaction rather than being mistaken for UNIQUE conflicts.
+    if (!recoveredExistingSequence) {
+      await insertAttachmentMappings(seq);
+    }
+    await dataWritten(db, seq);
+    const nowLive = !winningRevIsDeleted;
+    countDelta += Number(nowLive) - Number(liveStates.get(id) || false);
+    liveStates.set(id, nowLive);
   }
 
   /**
@@ -276,6 +293,10 @@ async function sqliteBulkDocs(
   function websqlProcessDocs(): Promise<void> {
     return new Promise((resolve, reject) => {
       let chain = Promise.resolve();
+      if (!docInfos.length) {
+        resolve();
+        return;
+      }
       processDocs(
         dbOpts.revs_limit,
         docInfos,
@@ -302,8 +323,10 @@ async function sqliteBulkDocs(
               isUpdate,
               delta,
               resultsIdx
-            ).then(() => callback(), callback);
+            ).then(() => callback());
           });
+          // Keep the chain rejected so already queued writes cannot run.
+          void chain.catch(reject);
         },
         opts,
         (err?: any) => {
@@ -329,6 +352,7 @@ async function sqliteBulkDocs(
       if (result.values && result.values.length) {
         const metadata = safeJsonParse(result.values[0].json);
         fetchedDocs.set(id, metadata);
+        liveStates.set(id, !isDeleted(metadata, findWinningRev(metadata)));
       }
     }
   }
@@ -367,18 +391,23 @@ async function sqliteBulkDocs(
   });
 
   // Execute operations in transaction
-  await transaction(async (txn: SQLiteDatabase) => {
+  await transaction(async (txn: TransactionalSQLiteDatabase) => {
+    db = txn;
+    fetchedDocs.clear();
+    liveStates.clear();
+    results.fill(undefined);
+    countDelta = 0;
     await verifyAttachments();
     try {
-      db = txn;
       await fetchExistingDocs();
       await websqlProcessDocs();
-      sqliteChanges.notify(api._name);
+      await incrementDocumentCount(db, countDelta);
     } catch (err: any) {
       throw handleSQLiteError(err);
     }
   });
 
+  sqliteChanges.notify(api._name);
   return results;
 }
 

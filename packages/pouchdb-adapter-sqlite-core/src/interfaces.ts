@@ -21,8 +21,19 @@ export interface SQLiteExecuteResult {
   };
 }
 
+/**
+ * Backwards-compatible adapter contract for implementations that expose the
+ * traditional explicit transaction lifecycle.
+ */
 export type SQLiteAdapter = AttachementProcessor & SQLiteDatabase;
-export type SQLiteLoggerAdapter = AttachementProcessor & SQLiteDatabase & SQLiteDatabaseLogger;
+/** Adapter contract for implementations that own callback-scoped transactions. */
+export type CallbackSQLiteAdapter = AttachementProcessor & CallbackSQLiteDatabase;
+/** Any adapter implementation accepted by the core. */
+export type TransactionalSQLiteAdapter = SQLiteAdapter | CallbackSQLiteAdapter;
+export type SQLiteLoggerAdapter = AttachementProcessor &
+  SQLiteDatabaseConnection &
+  CallbackTransactionCapability &
+  SQLiteDatabaseLogger;
 
 export interface AttachementProcessor {
   serializer?: BinarySerializer;
@@ -46,14 +57,14 @@ export interface SQLiteDatabaseLogger {
  * Abstract SQLite database connection interface
  * Defines basic methods for interacting with SQLite database
  */
-export interface SQLiteDatabase {
+export interface SQLiteDatabaseConnection {
   /**
    * Execute SQL query and return result set
    * @param sql SQL query statement
    * @param params Query parameters
    * @returns Query result
    */
-  query(sql: string, params?: any[]): Promise<SQLiteQueryResult>;
+  query(sql: string, params?: any[], opt?: SqlLogOptions): Promise<SQLiteQueryResult>;
 
   /**
    * Execute SQL statement, typically for INSERT/UPDATE/DELETE operations
@@ -61,30 +72,46 @@ export interface SQLiteDatabase {
    * @param params Statement parameters
    * @returns Execution result
    */
-  run(sql: string, params?: any[]): Promise<SQLiteExecuteResult>;
+  run(sql: string, params?: any[], opt?: SqlLogOptions): Promise<SQLiteExecuteResult>;
 
   /**
    * Execute SQL statement, typically for DDL operations like CREATE TABLE/INDEX
    * @param sql SQL statement
    * @returns Execution result
    */
-  execute(sql: string): Promise<void>;
+  execute(sql: string, opt?: SqlLogOptions): Promise<void>;
+}
 
-  /**
-   * Begin transaction
-   */
+/** A database whose implementation owns a callback-scoped transaction. */
+export interface CallbackTransactionCapability {
+  transaction(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void>;
+}
+
+/** A database that exposes the traditional explicit transaction lifecycle. */
+export interface ExplicitTransactionCapability {
+  /** Begin transaction. */
   beginTransaction(): Promise<void>;
 
-  /**
-   * Commit transaction
-   */
+  /** Commit transaction. */
   commitTransaction(): Promise<void>;
 
-  /**
-   * Rollback transaction
-   */
+  /** Rollback transaction. */
   rollbackTransaction(): Promise<void>;
 }
+
+/**
+ * Backwards-compatible database contract for explicit-transaction adapters.
+ * Existing adapters may continue to `implements SQLiteDatabase`.
+ */
+export interface SQLiteDatabase extends SQLiteDatabaseConnection, ExplicitTransactionCapability {}
+
+/** A database whose implementation owns callback-scoped transactions. */
+export interface CallbackSQLiteDatabase
+  extends SQLiteDatabaseConnection,
+    CallbackTransactionCapability {}
+
+/** Every implementation must provide one complete transaction capability. */
+export type TransactionalSQLiteDatabase = SQLiteDatabase | CallbackSQLiteDatabase;
 
 /**
  * Pending transaction interface in transaction queue
@@ -99,7 +126,7 @@ export interface PendingTransaction {
    * Callback when transaction starts executing
    * @param db SQLite database connection
    */
-  start: (db: SQLiteDatabase) => Promise<void>;
+  start: (db: TransactionalSQLiteDatabase) => Promise<void>;
 
   /**
    * Callback when transaction completes
@@ -118,14 +145,14 @@ export interface TransactionQueue {
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  push(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void>;
+  push(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void>;
 
   /**
    * Add read-only transaction to queue
    * @param fn Transaction function
    * @returns Promise that resolves when transaction completes
    */
-  pushReadOnly(fn: (db: SQLiteDatabase) => Promise<void>): Promise<void>;
+  pushReadOnly(fn: (db: TransactionalSQLiteDatabase) => Promise<void>): Promise<void>;
 }
 
 export interface BinarySerializer {
@@ -145,6 +172,8 @@ export interface OpenConfig {
   btoa?: (data: any) => any;
   createBlob?: (binary: any, type: any) => any;
   serializer?: BinarySerializer;
+  auto_compaction?: boolean;
+  revs_limit?: number;
 }
 /**
  * Database open options interface
@@ -198,8 +227,10 @@ export interface OpenDatabaseOptions extends OpenConfig {
 
 export type UserOpenDatabaseResult =
   | {
-      db: SQLiteAdapter;
+      db: TransactionalSQLiteAdapter;
       transactionQueue?: TransactionQueue;
+      /** Close this exact native handle. Preferred over the factory fallback. */
+      close?: () => Promise<void>;
     }
   | {
       error: Error;
@@ -209,8 +240,12 @@ export type UserOpenDatabaseResult =
  */
 export type OpenDatabaseResult =
   | {
-      db: SQLiteAdapter;
+      db: TransactionalSQLiteAdapter;
       transactionQueue: TransactionQueue;
+      /** Maximum number of SQL parameters supported by this implementation. */
+      maxBoundParameters: number;
+      /** Release this particular open database lease. Safe to call more than once. */
+      close: () => Promise<void>;
     }
   | {
       error: Error;
@@ -221,6 +256,18 @@ export type OpenDatabaseResult =
  * Creates instances of specific SQLite implementations
  */
 export interface SQLiteImplementationFactory {
+  /** Whether opened handles may be cached process-wide by database name. */
+  useDatabaseCache?: boolean;
+
+  /** Maximum number of parameters that may be bound to one SQL statement. Defaults to 999. */
+  maxBoundParameters?: number;
+
+  /**
+   * Derive the identity used for process-wide handle caching. Implementations
+   * should include every option that changes which native database is opened.
+   */
+  getDatabaseCacheKey?(options: OpenDatabaseOptions): string;
+
   /**
    * Open database
    * @param options Database open options
@@ -232,5 +279,5 @@ export interface SQLiteImplementationFactory {
    * Close database
    * @param name Database name
    */
-  closeDatabase(name: string): Promise<void>;
+  closeDatabase?(name: string): Promise<void>;
 }

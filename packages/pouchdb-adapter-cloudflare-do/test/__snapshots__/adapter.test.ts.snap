@@ -1,0 +1,361 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`persistent document counts > measures bounded count reads for 10 documents 1`] = `
+{
+  "deleted": 0,
+  "depth": 1,
+  "metrics": {
+    "baselineInfo": {
+      "reads": 21,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineKeys": {
+      "reads": 22,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineLimit0": {
+      "reads": 20,
+      "updates": 0,
+      "writes": 0,
+    },
+    "create": {
+      "reads": 4,
+      "updates": 1,
+      "writes": 17,
+    },
+    "info": {
+      "reads": 2,
+      "updates": 0,
+      "writes": 0,
+    },
+    "keys": {
+      "reads": 3,
+      "updates": 0,
+      "writes": 0,
+    },
+    "limit0": {
+      "reads": 1,
+      "updates": 0,
+      "writes": 0,
+    },
+    "netZero": {
+      "reads": 5,
+      "updates": 0,
+      "writes": 15,
+    },
+    "recount": {
+      "reads": 26,
+      "updates": 0,
+      "writes": 0,
+    },
+    "update": {
+      "reads": 4,
+      "updates": 0,
+      "writes": 7,
+    },
+  },
+  "size": 10,
+}
+`;
+
+exports[`persistent document counts > measures bounded count reads for 10 documents 2`] = `
+{
+  "deleted": 0.3,
+  "depth": 3,
+  "metrics": {
+    "baselineInfo": {
+      "reads": 21,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineKeys": {
+      "reads": 22,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineLimit0": {
+      "reads": 20,
+      "updates": 0,
+      "writes": 0,
+    },
+    "create": {
+      "reads": 4,
+      "updates": 1,
+      "writes": 17,
+    },
+    "info": {
+      "reads": 2,
+      "updates": 0,
+      "writes": 0,
+    },
+    "keys": {
+      "reads": 3,
+      "updates": 0,
+      "writes": 0,
+    },
+    "limit0": {
+      "reads": 1,
+      "updates": 0,
+      "writes": 0,
+    },
+    "netZero": {
+      "reads": 5,
+      "updates": 0,
+      "writes": 15,
+    },
+    "recount": {
+      "reads": 26,
+      "updates": 0,
+      "writes": 0,
+    },
+    "update": {
+      "reads": 4,
+      "updates": 0,
+      "writes": 7,
+    },
+  },
+  "size": 10,
+}
+`;
+
+exports[`persistent document counts > measures bounded count reads for 100 documents 1`] = `
+{
+  "deleted": 0,
+  "depth": 1,
+  "metrics": {
+    "baselineInfo": {
+      "reads": 201,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineKeys": {
+      "reads": 202,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineLimit0": {
+      "reads": 200,
+      "updates": 0,
+      "writes": 0,
+    },
+    "create": {
+      "reads": 4,
+      "updates": 1,
+      "writes": 17,
+    },
+    "info": {
+      "reads": 2,
+      "updates": 0,
+      "writes": 0,
+    },
+    "keys": {
+      "reads": 3,
+      "updates": 0,
+      "writes": 0,
+    },
+    "limit0": {
+      "reads": 1,
+      "updates": 0,
+      "writes": 0,
+    },
+    "netZero": {
+      "reads": 5,
+      "updates": 0,
+      "writes": 15,
+    },
+    "recount": {
+      "reads": 206,
+      "updates": 0,
+      "writes": 0,
+    },
+    "update": {
+      "reads": 4,
+      "updates": 0,
+      "writes": 7,
+    },
+  },
+  "size": 100,
+}
+`;
+
+exports[`persistent document counts > measures bounded count reads for 100 documents 2`] = `
+{
+  "deleted": 0.3,
+  "depth": 3,
+  "metrics": {
+    "baselineInfo": {
+      "reads": 201,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineKeys": {
+      "reads": 202,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineLimit0": {
+      "reads": 200,
+      "updates": 0,
+      "writes": 0,
+    },
+    "create": {
+      "reads": 4,
+      "updates": 1,
+      "writes": 17,
+    },
+    "info": {
+      "reads": 2,
+      "updates": 0,
+      "writes": 0,
+    },
+    "keys": {
+      "reads": 3,
+      "updates": 0,
+      "writes": 0,
+    },
+    "limit0": {
+      "reads": 1,
+      "updates": 0,
+      "writes": 0,
+    },
+    "netZero": {
+      "reads": 5,
+      "updates": 0,
+      "writes": 15,
+    },
+    "recount": {
+      "reads": 206,
+      "updates": 0,
+      "writes": 0,
+    },
+    "update": {
+      "reads": 4,
+      "updates": 0,
+      "writes": 7,
+    },
+  },
+  "size": 100,
+}
+`;
+
+exports[`persistent document counts > measures bounded count reads for 1000 documents 1`] = `
+{
+  "deleted": 0,
+  "depth": 1,
+  "metrics": {
+    "baselineInfo": {
+      "reads": 2001,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineKeys": {
+      "reads": 2002,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineLimit0": {
+      "reads": 2000,
+      "updates": 0,
+      "writes": 0,
+    },
+    "create": {
+      "reads": 4,
+      "updates": 1,
+      "writes": 17,
+    },
+    "info": {
+      "reads": 2,
+      "updates": 0,
+      "writes": 0,
+    },
+    "keys": {
+      "reads": 3,
+      "updates": 0,
+      "writes": 0,
+    },
+    "limit0": {
+      "reads": 1,
+      "updates": 0,
+      "writes": 0,
+    },
+    "netZero": {
+      "reads": 5,
+      "updates": 0,
+      "writes": 15,
+    },
+    "recount": {
+      "reads": 2006,
+      "updates": 0,
+      "writes": 0,
+    },
+    "update": {
+      "reads": 4,
+      "updates": 0,
+      "writes": 7,
+    },
+  },
+  "size": 1000,
+}
+`;
+
+exports[`persistent document counts > measures bounded count reads for 1000 documents 2`] = `
+{
+  "deleted": 0.3,
+  "depth": 3,
+  "metrics": {
+    "baselineInfo": {
+      "reads": 2001,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineKeys": {
+      "reads": 2002,
+      "updates": 0,
+      "writes": 0,
+    },
+    "baselineLimit0": {
+      "reads": 2000,
+      "updates": 0,
+      "writes": 0,
+    },
+    "create": {
+      "reads": 4,
+      "updates": 1,
+      "writes": 17,
+    },
+    "info": {
+      "reads": 2,
+      "updates": 0,
+      "writes": 0,
+    },
+    "keys": {
+      "reads": 3,
+      "updates": 0,
+      "writes": 0,
+    },
+    "limit0": {
+      "reads": 1,
+      "updates": 0,
+      "writes": 0,
+    },
+    "netZero": {
+      "reads": 5,
+      "updates": 0,
+      "writes": 15,
+    },
+    "recount": {
+      "reads": 2006,
+      "updates": 0,
+      "writes": 0,
+    },
+    "update": {
+      "reads": 4,
+      "updates": 0,
+      "writes": 7,
+    },
+  },
+  "size": 1000,
+}
+`;

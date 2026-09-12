@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pouchdb-adapter-cloudflare-do-test",
+  "main": "test/worker.ts",
+  "compatibility_date": "2026-08-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "POUCH_DATABASE", "class_name": "PouchDatabase" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PouchDatabase"] }],
+}

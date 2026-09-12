@@ -7,7 +7,8 @@ import {
   SQLiteQueryResult,
   SQLiteExecuteResult,
   UserOpenDatabaseResult,
-  SQLiteAdapter,
+  SQLiteDatabaseConnection,
+  ExplicitTransactionCapability,
 } from 'pouchdb-adapter-sqlite-core/interface';
 import { escapeSerializer } from 'pouchdb-adapter-sqlite-core';
 import { logger } from './logger';
@@ -16,7 +17,9 @@ import { logger } from './logger';
  * Capacitor SQLite Adapter class
  * Implements SQLiteDatabase interface, converts Capacitor SQLite API to generic interface
  */
-export class CapacitorSQLiteAdapter implements SQLiteAdapter {
+export class CapacitorSQLiteAdapter
+  implements SQLiteDatabaseConnection, ExplicitTransactionCapability
+{
   private connection: SQLiteDBConnection;
 
   /**
@@ -93,6 +96,14 @@ export class CapacitorSQLiteAdapter implements SQLiteAdapter {
  * Used to create Capacitor SQLite Adapter instances
  */
 export const capacitorSQLiteFactory = {
+  getDatabaseCacheKey(options: any): string {
+    const dbName = options.name.endsWith('.db') ? options.name : `${options.name}.db`;
+    // SQLiteConnection's native registry is database-name based. Creating a
+    // second core cache entry for different creation options would construct a
+    // fresh manager and invalidate the connection held by the first lease.
+    return dbName;
+  },
+
   /**
    * Open database
    * @param options Database open options
@@ -132,7 +143,10 @@ export const capacitorSQLiteFactory = {
       logger('open database: %o', adapter);
 
       // Return adapter instance, TransactionQueue will be created by core library
-      return { db: adapter };
+      return {
+        db: adapter,
+        close: () => sqlite.closeConnection(dbName, options.readonly || false),
+      };
     } catch (err: any) {
       return { error: err };
     }

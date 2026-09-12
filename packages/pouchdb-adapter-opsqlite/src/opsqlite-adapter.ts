@@ -1,7 +1,8 @@
 import type {
   SQLiteQueryResult,
   SQLiteExecuteResult,
-  SQLiteAdapter,
+  ExplicitTransactionCapability,
+  SQLiteDatabaseConnection,
 } from 'pouchdb-adapter-sqlite-core/interface';
 import { DB, open } from '@op-engineering/op-sqlite';
 import { logger } from './logger';
@@ -11,7 +12,7 @@ import { createBlob } from './processBinary';
  * OPSQLite adapter class
  * Implements SQLiteDatabase interface, converts OPSQLite API to generic interface
  */
-export class OPSQLiteAdapter implements SQLiteAdapter {
+export class OPSQLiteAdapter implements SQLiteDatabaseConnection, ExplicitTransactionCapability {
   private db: DB;
 
   /**
@@ -117,6 +118,10 @@ export class OPSQLiteAdapter implements SQLiteAdapter {
  */
 export const opsqliteFactory = {
   db: null as null | DB,
+  getDatabaseCacheKey(options: any): string {
+    const dbName = options.name.endsWith('.db') ? options.name : `${options.name}.db`;
+    return JSON.stringify([dbName, options.location || 'default']);
+  },
   /**
    * Open database
    * @param options Database opening options
@@ -140,7 +145,15 @@ export const opsqliteFactory = {
       const adapter = new OPSQLiteAdapter(db);
       logger('Created OPSQLite adapter instance', adapter);
 
-      return { db: adapter };
+      return {
+        db: adapter,
+        close: async () => {
+          db.close();
+          if (this.db === db) {
+            this.db = null;
+          }
+        },
+      };
     } catch (err: any) {
       console.error('Failed to open database:', err);
       return { error: err };

@@ -1,13 +1,100 @@
-import { OpenDatabaseResult, SQLiteImplementationFactory } from './interfaces';
+import {
+  OpenDatabaseOptions,
+  OpenDatabaseResult,
+  TransactionalSQLiteAdapter,
+  SQLiteImplementationFactory,
+  TransactionQueue as TransactionQueueLike,
+} from './interfaces';
 import { logger } from './logger';
 import { LoggerSqliteAdapterWarpper } from './LoggerAdapter';
-import { TransactionQueue } from './transactionQueue';
+import { TransactionQueue as DefaultTransactionQueue } from './transactionQueue';
 
 // Stores registered SQLite implementation factories
 const implementationFactories = new Map<string, SQLiteImplementationFactory>();
 
-// Caches opened database connections
-const cachedDatabases = new Map<string, OpenDatabaseResult>();
+interface SharedDatabase {
+  db: TransactionalSQLiteAdapter;
+  transactionQueue: TransactionQueueLike;
+  maxBoundParameters: number;
+  close: () => Promise<void>;
+}
+
+interface CachedDatabase {
+  shared: Promise<SharedDatabase>;
+  referenceCount: number;
+  closing?: Promise<void>;
+}
+
+// Cache connection creation as well as opened handles so concurrent opens of
+// the same implementation and database share one native connection.
+const cachedDatabases = new Map<string, CachedDatabase>();
+
+function cacheKey(
+  implementationName: string,
+  factory: SQLiteImplementationFactory,
+  options: OpenDatabaseOptions
+): string {
+  const databaseIdentity = factory.getDatabaseCacheKey?.(options) ?? options.name;
+  return JSON.stringify([implementationName, databaseIdentity]);
+}
+
+function maximumBoundParameterCount(factory: SQLiteImplementationFactory): number {
+  const maximum = factory.maxBoundParameters ?? 999;
+  if (!Number.isSafeInteger(maximum) || maximum <= 0) {
+    throw new Error('maxBoundParameters must be a positive safe integer');
+  }
+  return maximum;
+}
+
+async function createSharedDatabase(
+  factory: SQLiteImplementationFactory,
+  options: OpenDatabaseOptions
+): Promise<SharedDatabase> {
+  const maxBoundParameters = maximumBoundParameterCount(factory);
+  const result = await factory.openDatabase(options);
+  if ('error' in result) {
+    throw result.error;
+  }
+
+  const db = new LoggerSqliteAdapterWarpper(result.db);
+  return {
+    db,
+    transactionQueue: result.transactionQueue ?? new DefaultTransactionQueue(db),
+    maxBoundParameters,
+    close:
+      result.close ??
+      (factory.closeDatabase ? () => factory.closeDatabase!(options.name) : async () => undefined),
+  };
+}
+
+function createCacheEntry(
+  factory: SQLiteImplementationFactory,
+  options: OpenDatabaseOptions,
+  afterClose?: Promise<void>
+): CachedDatabase {
+  return {
+    shared: afterClose
+      ? afterClose.then(() => createSharedDatabase(factory, options))
+      : createSharedDatabase(factory, options),
+    referenceCount: 0,
+  };
+}
+
+function databaseLease(shared: SharedDatabase, release: () => Promise<void>): OpenDatabaseResult {
+  let released = false;
+  return {
+    db: shared.db,
+    transactionQueue: shared.transactionQueue,
+    maxBoundParameters: shared.maxBoundParameters,
+    async close() {
+      if (released) {
+        return;
+      }
+      released = true;
+      await release();
+    },
+  };
+}
 
 /**
  * Register SQLite implementation factory
@@ -41,80 +128,71 @@ export function getSQLiteImplementation(name: string): SQLiteImplementationFacto
  * @param options Database open options
  * @returns Database open result
  */
-export async function openDatabase(options: any): Promise<OpenDatabaseResult> {
-  const cacheKey = options.name;
-
-  // Check if this database connection is already cached
-  const cachedResult = cachedDatabases.get(cacheKey);
-  if (cachedResult) {
-    logger.debug(`Using cached database connection: ${options.name}`);
-    return cachedResult;
-  }
-
-  // Determine which SQLite implementation to use
+export async function openDatabase(options: OpenDatabaseOptions): Promise<OpenDatabaseResult> {
   const implementationName = options.sqliteImplementation || 'default';
 
   try {
-    // Get SQLite implementation factory
     const factory = getSQLiteImplementation(implementationName);
+    // Cache policy belongs to the implementation. A caller cannot safely opt
+    // out when a native driver itself returns one connection per database name.
+    const useDatabaseCache = factory.useDatabaseCache !== false;
 
-    // Use factory to open database
-    logger.debug(`Opening database: ${options.name} (using ${implementationName} implementation)`);
-    const result = await factory.openDatabase(options);
-    if ('db' in result) {
-      const db = result.db;
-      // warrper it with logger adapter
-      result.db = new LoggerSqliteAdapterWarpper(db);
-      if (!result.transactionQueue) result.transactionQueue = new TransactionQueue(result.db);
+    if (!useDatabaseCache) {
+      logger.debug(`Opening uncached database: ${options.name} (${implementationName})`);
+      const shared = await createSharedDatabase(factory, options);
+      return databaseLease(shared, shared.close);
     }
 
-    const r = result as OpenDatabaseResult;
+    const key = cacheKey(implementationName, factory, options);
+    let cached = cachedDatabases.get(key);
+    if (!cached) {
+      logger.debug(
+        `Opening database: ${options.name} (using ${implementationName} implementation)`
+      );
+      cached = createCacheEntry(factory, options);
+      cachedDatabases.set(key, cached);
+    } else if (cached.closing) {
+      logger.debug(`Waiting for database to close before reopening: ${options.name}`);
+      cached = createCacheEntry(factory, options, cached.closing);
+      cachedDatabases.set(key, cached);
+    } else {
+      logger.debug(`Using cached database connection: ${options.name}`);
+    }
 
-    // @ts-ignore
-    // Cache the result
-    cachedDatabases.set(cacheKey, r);
+    // Reserve this lease before yielding. Otherwise the last existing lease
+    // can close the shared native handle while this open is awaiting it.
+    cached.referenceCount++;
 
-    return r;
+    let shared: SharedDatabase;
+    try {
+      shared = await cached.shared;
+    } catch (error) {
+      cached.referenceCount--;
+      if (cached.referenceCount === 0 && cachedDatabases.get(key) === cached) {
+        cachedDatabases.delete(key);
+      }
+      throw error;
+    }
+
+    return databaseLease(shared, async () => {
+      cached.referenceCount--;
+      if (cached.referenceCount > 0) {
+        return;
+      }
+
+      const closing = Promise.resolve().then(shared.close);
+      cached.closing = closing;
+      try {
+        await closing;
+      } finally {
+        if (cachedDatabases.get(key) === cached) {
+          cachedDatabases.delete(key);
+        }
+      }
+    });
   } catch (error) {
     logger.error(`Failed to open database: ${options.name}`, error);
     return { error: error instanceof Error ? error : new Error(String(error)) };
-  }
-}
-
-/**
- * Close database
- * @param name Database name
- */
-export async function closeDatabase(name: string): Promise<void> {
-  const cachedResult = cachedDatabases.get(name);
-  if (!cachedResult) {
-    logger.debug(`Database not open, no need to close: ${name}`);
-    return;
-  }
-
-  if ('error' in cachedResult) {
-    logger.debug(`Database connection has error, remove from cache directly: ${name}`);
-    cachedDatabases.delete(name);
-    return;
-  }
-
-  try {
-    // Determine SQLite implementation to use
-    // Assume all implementations use same cache key format
-    for (const [implName, factory] of implementationFactories.entries()) {
-      try {
-        logger.debug(`Attempt to close database using ${implName} implementation: ${name}`);
-        await factory.closeDatabase(name);
-        logger.debug(`Successfully closed database: ${name}`);
-        break;
-      } catch (error) {
-        // Try next implementation
-        logger.debug(`Failed to close database using ${implName} implementation, try next one`);
-      }
-    }
-  } finally {
-    // Remove from cache regardless of success
-    cachedDatabases.delete(name);
   }
 }
 
