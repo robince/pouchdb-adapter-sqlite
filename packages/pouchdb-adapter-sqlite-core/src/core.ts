@@ -5,6 +5,7 @@ import {
   latest as getLatest,
   removeLeafFromTree,
   winningRev,
+  isDeleted,
 } from 'pouchdb-merge';
 import { safeJsonParse, safeJsonStringify } from 'pouchdb-json';
 import {
@@ -13,6 +14,11 @@ import {
 } from 'pouchdb-binary-utils';
 
 import sqliteBulkDocs from './bulkDocs';
+import {
+  readDocumentCount,
+  incrementDocumentCount,
+  recountDocumentsForMigration,
+} from './documentCount';
 
 import { MISSING_DOC, REV_CONFLICT, createError } from 'pouchdb-errors';
 
@@ -82,17 +88,6 @@ async function getMaxSeq(db: TransactionalSQLiteDatabase): Promise<number> {
   const res = await db.query(sql, []);
   const updateSeq = res.values && res.values.length > 0 ? (res.values[0].seq as number) || 0 : 0;
   return updateSeq;
-}
-
-async function countDocs(db: TransactionalSQLiteDatabase): Promise<number> {
-  const sql = select(
-    'COUNT(' + DOC_STORE + ".id) AS 'num'",
-    [DOC_STORE, BY_SEQ_STORE],
-    DOC_STORE_AND_BY_SEQ_JOINER,
-    BY_SEQ_STORE + '.deleted=0'
-  );
-  const result = await db.query(sql, []);
-  return result.values && result.values.length > 0 ? (result.values[0].num as number) || 0 : 0;
 }
 
 async function latest(
@@ -232,37 +227,50 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
   }
 
   async function fetchVersion(db: TransactionalSQLiteDatabase) {
-    logger.debug('Fetching version');
-    const sql = 'SELECT sql FROM sqlite_master WHERE tbl_name = ' + META_STORE;
-
-    logger.debug('Version query', sql);
-    const result = await db.query(sql);
-    logger.debug('Query result', result);
-    if (!result.values?.length) {
-      await onGetVersion(db, 0);
-    } else if (!/db_version/.test(result.values[0].sql as string)) {
-      await db.execute('ALTER TABLE ' + META_STORE + ' ADD COLUMN db_version INTEGER');
-      await onGetVersion(db, 1);
-    } else {
-      const resDBVer = await db.query('SELECT db_version FROM ' + META_STORE);
-      if (resDBVer.values && resDBVer.values.length > 0) {
-        const dbVersion = resDBVer.values[0].db_version as number;
-        await onGetVersion(db, dbVersion);
-      }
-    }
-  }
-
-  async function onGetVersion(db: TransactionalSQLiteDatabase, dbVersion: number) {
-    if (dbVersion === 0) {
+    const columns = (await db.query('PRAGMA table_info(' + META_STORE + ')')).values || [];
+    if (!columns.length) {
       await createInitialSchema(db);
-    } else {
-      await runMigrations(db, dbVersion);
+      return;
     }
+    const names = new Set(columns.map((column) => column.name));
+    const rows = (await db.query('SELECT * FROM ' + META_STORE)).values;
+    if (rows?.length !== 1 || typeof rows[0].dbid !== 'string' || !rows[0].dbid.length) {
+      throw new Error('Invalid SQLite metadata row');
+    }
+    // The version-1 adapter could add db_version without populating it.
+    const version =
+      !names.has('db_version') || rows[0].db_version === null ? 1 : rows[0].db_version;
+    if (!Number.isInteger(version) || version < 1 || version > ADAPTER_VERSION) {
+      throw new Error('Unsupported SQLite schema version: ' + version);
+    }
+    if (version === 1) {
+      if (!names.has('db_version')) {
+        await db.execute('ALTER TABLE ' + META_STORE + ' ADD COLUMN db_version INTEGER');
+      }
+      if (!names.has('doc_count')) {
+        await db.execute(
+          'ALTER TABLE ' +
+            META_STORE +
+            ' ADD COLUMN doc_count INTEGER NOT NULL DEFAULT 0 CHECK (doc_count >= 0)'
+        );
+      }
+      const count = await recountDocumentsForMigration(db);
+      await db.run('UPDATE ' + META_STORE + ' SET doc_count = ?', [count]);
+      await readDocumentCount(db);
+      await db.run('UPDATE ' + META_STORE + ' SET db_version = ?', [ADAPTER_VERSION]);
+    } else {
+      if (!names.has('doc_count')) throw new Error('Missing SQLite document count');
+      await readDocumentCount(db);
+    }
+    instanceId = rows[0].dbid;
   }
 
   async function createInitialSchema(db: TransactionalSQLiteDatabase) {
     logger.debug('Creating initial schema');
-    const meta = 'CREATE TABLE IF NOT EXISTS ' + META_STORE + ' (dbid, db_version INTEGER)';
+    const meta =
+      'CREATE TABLE IF NOT EXISTS ' +
+      META_STORE +
+      ' (dbid, db_version INTEGER, doc_count INTEGER NOT NULL DEFAULT 0 CHECK (doc_count >= 0))';
     const attach =
       'CREATE TABLE IF NOT EXISTS ' +
       ATTACH_STORE +
@@ -302,20 +310,6 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     logger.debug('Creation successful');
   }
 
-  async function runMigrations(db: TransactionalSQLiteDatabase, dbVersion: number) {
-    // Migration logic can be added here
-
-    const migrated = dbVersion < ADAPTER_VERSION;
-    if (migrated) {
-      await db.execute('UPDATE ' + META_STORE + ' SET db_version = ' + ADAPTER_VERSION);
-    }
-    const result = await db.query('SELECT dbid FROM ' + META_STORE);
-    if (result.values && result.values.length > 0) {
-      instanceId = result.values[0].dbid as string;
-    }
-    onGetInstanceId();
-  }
-
   function onGetInstanceId() {
     // Does nothing
   }
@@ -330,7 +324,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
     readTransaction(async (db: TransactionalSQLiteDatabase) => {
       try {
         const seq = await getMaxSeq(db);
-        const docCount = await countDocs(db);
+        const docCount = await readDocumentCount(db);
         callback(null, {
           doc_count: docCount,
           update_seq: seq,
@@ -542,7 +536,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       };
 
       try {
-        const totalRows = await countDocs(db);
+        const totalRows = await readDocumentCount(db);
         const updateSeq = opts.update_seq ? await getMaxSeq(db) : undefined;
 
         if (keys) {
@@ -867,6 +861,7 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
       }
 
       const metadata = safeJsonParse(result.values[0].json);
+      const wasLive = !isDeleted(metadata, winningRev(metadata));
       for (const rev of revs) {
         metadata.rev_tree = removeLeafFromTree(metadata.rev_tree, rev);
       }
@@ -898,6 +893,8 @@ function SqlPouch(opts: OpenDatabaseOptions, cb: (err: any) => void) {
           docId,
         ]);
       }
+      const isLive = metadata.rev_tree.length > 0 && !isDeleted(metadata, winningRev(metadata));
+      await incrementDocumentCount(db, Number(isLive) - Number(wasLive));
     })
       .then(() => callback(null, { ok: true, deletedRevs: revs, documentWasRemovedCompletely }))
       .catch((error) => {

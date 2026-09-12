@@ -2,7 +2,7 @@
  * Adapter version
  * Used for database schema versioning
  */
-export const ADAPTER_VERSION = 1;
+export const ADAPTER_VERSION = 2;
 
 /**
  * Add quotes to table name
