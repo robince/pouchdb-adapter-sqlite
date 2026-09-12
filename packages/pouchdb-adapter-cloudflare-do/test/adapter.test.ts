@@ -390,7 +390,8 @@ describe('persistent document counts', () => {
   it.each(['column', 'count', 'version'])(
     'rolls back interrupted migration after %s',
     async (stage) => {
-      expect(await database(`count-migration-failure-${stage}`).migrationFailure(stage)).toEqual({
+      const db = database(`count-migration-failure-${stage}`);
+      expect(await db.migrationFailure(stage)).toEqual({
         rejected: true,
         version: 1,
         hasCount: false,
@@ -398,6 +399,8 @@ describe('persistent document counts', () => {
         migrationRecounts: 1,
         recounts: 1,
       });
+      await db.put({ _id: 'after-probe' });
+      await exact(db, 2);
     }
   );
   it('preserves counts through stemming, compaction, destroy and recreation', async () => {
@@ -408,9 +411,10 @@ describe('persistent document counts', () => {
     });
   });
   it.each([true, false])('updates a migrated stale winner with new_edits=%s', async (newEdits) => {
-    expect(
-      await database(`count-migrated-conflict-${newEdits}`).migratedConflictProbe(newEdits)
-    ).toEqual({ before: 1, after: 1, all: 1 });
+    const db = database(`count-migrated-conflict-${newEdits}`);
+    expect(await db.migratedConflictProbe(newEdits)).toEqual({ before: 1, after: 1, all: 1 });
+    await db.put({ _id: 'after-probe' });
+    await exact(db, 2);
   });
   it('serializes writes through two handles', async () => {
     expect(await database('count-concurrent').concurrentCountProbe()).toEqual({
@@ -469,12 +473,17 @@ describe('persistent document counts', () => {
       const db = database(`count-${kind}`);
       await db.bulkDocs([{ _id: 'a' }, { _id: 'b' }, { _id: '_local/x' }]);
       expect((await db.countProbe(kind)).doc_count).toBe(2);
+      await db.put({ _id: 'after-probe' });
+      await exact(db, 3);
     }
   );
   it.each(['future', 'missing', 'duplicate', 'unsafe', 'missing-count', 'fraction'])(
     'rejects %s metadata',
     async (kind) => {
-      expect(await database(`count-invalid-${kind}`).countProbe(kind)).toEqual({ rejected: true });
+      const db = database(`count-invalid-${kind}`);
+      expect(await db.countProbe(kind)).toEqual({ rejected: true });
+      await db.put({ _id: 'after-probe' });
+      await exact(db, 1);
     }
   );
   it.each([10, 100, 1000])(

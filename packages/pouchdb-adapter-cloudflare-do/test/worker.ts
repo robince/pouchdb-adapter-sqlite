@@ -74,8 +74,19 @@ export class PouchDatabase extends DurableObject<Env> {
 
   async countProbe(kind: string) {
     await this.db.info();
-    await this.db.close();
+    const setup = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+    try {
+      await setup.info();
+    } finally {
+      await setup.close();
+    }
     const sql = this.ctx.storage.sql;
+    const originalSchema = sql
+      .exec("SELECT sql FROM sqlite_master WHERE name='metadata-store'")
+      .one().sql as string;
+    const originalMetadata = sql
+      .exec('SELECT dbid, db_version, doc_count FROM "metadata-store"')
+      .one();
     if (kind.startsWith('migration')) {
       if (kind !== 'migration-existing')
         sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
@@ -100,22 +111,40 @@ export class PouchDatabase extends DurableObject<Env> {
       return { rejected: true };
     } finally {
       await fresh.close().catch(() => {});
+      if (!kind.startsWith('migration')) {
+        // Invalid-schema probes must not poison subsequent RPCs on the shared handle.
+        await this.ctx.storage.transaction(async () => {
+          sql.exec('DROP TABLE "metadata-store"');
+          sql.exec(originalSchema);
+          sql.exec(
+            'INSERT INTO "metadata-store" (dbid, db_version, doc_count) VALUES (?, ?, ?)',
+            originalMetadata.dbid,
+            originalMetadata.db_version,
+            originalMetadata.doc_count
+          );
+        });
+      }
     }
   }
 
   async migratedConflictProbe(newEdits: boolean) {
-    await this.db.bulkDocs(
-      [
-        { _id: 'a', _rev: '1-z' },
-        { _id: 'a', _rev: '1-b' },
-      ],
-      { new_edits: false }
-    );
-    await this.db.bulkDocs(
-      [{ _id: 'a', _rev: '2-c', _deleted: true, _revisions: { start: 2, ids: ['c', 'b'] } }],
-      { new_edits: false }
-    );
-    await this.db.close();
+    await this.db.info();
+    const setup = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+    try {
+      await setup.bulkDocs(
+        [
+          { _id: 'a', _rev: '1-z' },
+          { _id: 'a', _rev: '1-b' },
+        ],
+        { new_edits: false }
+      );
+      await setup.bulkDocs(
+        [{ _id: 'a', _rev: '2-c', _deleted: true, _revisions: { start: 2, ids: ['c', 'b'] } }],
+        { new_edits: false }
+      );
+    } finally {
+      await setup.close();
+    }
     this.ctx.storage.sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
     this.ctx.storage.sql.exec('UPDATE "metadata-store" SET db_version=1');
     const fresh = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
@@ -178,8 +207,13 @@ export class PouchDatabase extends DurableObject<Env> {
   }
 
   async migrationFailure(stage: string) {
-    await this.db.put({ _id: 'survivor' });
-    await this.db.close();
+    await this.db.info();
+    const setup = new PouchDB('db', cloudflareDOOptions(this.ctx.storage));
+    try {
+      await setup.put({ _id: 'survivor' });
+    } finally {
+      await setup.close();
+    }
     const storage = this.ctx.storage;
     storage.sql.exec('ALTER TABLE "metadata-store" DROP COLUMN doc_count');
     storage.sql.exec('UPDATE "metadata-store" SET db_version=1');
@@ -218,12 +252,19 @@ export class PouchDatabase extends DurableObject<Env> {
     fail = false;
     recounts = 0;
     const fresh = new PouchDB('db', cloudflareDOOptions(wrapped));
-    const info = await fresh.info();
-    await fresh.close();
+    let info: PouchDB.Core.DatabaseInfo;
+    try {
+      info = await fresh.info();
+    } finally {
+      await fresh.close();
+    }
     const migrationRecounts = recounts;
     const reopened = new PouchDB('db', cloudflareDOOptions(wrapped));
-    await reopened.info();
-    await reopened.close();
+    try {
+      await reopened.info();
+    } finally {
+      await reopened.close();
+    }
     return { rejected, version, hasCount, count: info.doc_count, migrationRecounts, recounts };
   }
 
