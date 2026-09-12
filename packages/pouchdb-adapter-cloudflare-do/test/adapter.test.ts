@@ -43,6 +43,27 @@ describe('PouchDB Durable Object SQLite adapter', () => {
     expect(changes.last_seq).toBe(3);
   });
 
+  it('returns per-document conflict and success results in one bulk write', async () => {
+    const db = database('bulk-mixed-results');
+    const existing = await db.put({ _id: 'existing', value: 'before' });
+
+    const results = await db.bulkDocs([
+      { _id: 'existing', value: 'conflict' },
+      { _id: 'fresh', value: 'created' },
+    ]);
+
+    expect(results[0]).toMatchObject({
+      error: true,
+      id: 'existing',
+      status: 409,
+    });
+    expect(results[1]).toMatchObject({ ok: true, id: 'fresh' });
+    expect((await db.get('existing')).value).toBe('before');
+    expect((await db.get('fresh')).value).toBe('created');
+    expect((await db.info()).doc_count).toBe(2);
+    expect(existing.ok).toBe(true);
+  });
+
   it('finishes attachment reads before allDocs and changes complete', async () => {
     const db = database('attachment-reads');
     await db.put({
@@ -385,6 +406,33 @@ describe('persistent document counts', () => {
       rejected: true,
       count: 0,
       persisted: 0,
+    });
+  });
+  it('rolls back after a document metadata insert failure and accepts a follow-up write on the same handle', async () => {
+    expect(await database('bulk-failure-after-document-insert').bulkFailureProbe()).toEqual({
+      rejected: true,
+      reason: 'injected after document insert',
+      injected: true,
+      physical: {
+        documents: 0,
+        sequences: 0,
+        docCount: 0,
+        maxSequence: 0,
+        sqliteSequence: 0,
+      },
+      beforeFollowUp: {
+        info: expect.objectContaining({ doc_count: 0, update_seq: 0 }),
+        rows: [],
+        changes: [],
+        failedA: 404,
+        failedB: 404,
+      },
+      afterFollowUp: {
+        info: expect.objectContaining({ doc_count: 1, update_seq: 1 }),
+        rows: ['after-failure'],
+        changes: ['after-failure'],
+        results: [{ ok: true, id: 'after-failure' }],
+      },
     });
   });
   it.each(['column', 'count', 'version'])(
